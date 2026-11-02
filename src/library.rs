@@ -173,9 +173,10 @@ impl Library {
     }
 }
 
-/// Named tracks first, in the soundtrack's order; then the others by id.
+/// Named tracks first, alphabetically by name (case and accents of ASCII
+/// aside); then the unnamed `musicNNN` by number.
 pub fn sort_tracks(v: &mut [TrackInfo]) {
-    v.sort_by_key(|t| (t.pc_name.is_empty(), t.pc_name.clone(), t.id));
+    v.sort_by_key(|t| (t.title.is_empty(), t.title.to_lowercase(), t.id));
 }
 
 
@@ -194,11 +195,21 @@ mod tests {
     }
 
     #[test]
-    fn named_tracks_first() {
-        let t = |id, n: &str| TrackInfo { id, title: String::new(), pc_name: n.into() };
-        let mut v = [t(5, ""), t(16, "1_09_battle_theme"), t(1, ""), t(130, "1_02_zanarkand")];
+    fn named_tracks_first_alphabetically() {
+        let t = |id, n: &str| TrackInfo { id, title: if n.is_empty() { String::new() } else { title(n) }, pc_name: n.into() };
+        let mut v = [
+            t(5, ""),
+            t(130, "1_02_zanarkand"),
+            t(16, "1_09_battle_theme"),
+            t(1, ""),
+            t(161, "1_04_tidus_s_theme"),
+            t(150, "3_18_song_of_prayer_bahamut"),
+            t(120, ""),
+            t(48, "1_03_prelude"),
+        ];
         sort_tracks(&mut v);
         let ids: Vec<u16> = v.iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec![130, 16, 1, 5]);
+        // Battle Theme, Prelude, Song of Prayer, Tidus's Theme, Zanarkand; then 1, 5, 120
+        assert_eq!(ids, vec![16, 48, 150, 161, 130, 1, 5, 120]);
     }
 }

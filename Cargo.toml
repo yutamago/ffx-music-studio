@@ -13,7 +13,7 @@ path = "src/main.rs"
 default = []
 # Sound output on Linux needs ALSA's development files (libasound2-dev);
 # without it the Linux build plays to a silent clock (`--render` works).
-alsa = ["dep:cpal"]
+alsa = ["dep:cpal", "dep:midir"]
 
 [dependencies]
 demaster = { path = "../converter" }
@@ -22,6 +22,8 @@ anyhow = "1"
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 ringbuf = "0.4"
 cpal = { version = "0.18", optional = true }
+midir = { version = "0.11", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 cpal = "0.18"
+midir = "0.11"

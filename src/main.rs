@@ -5,11 +5,17 @@
 
 mod app;
 mod audio;
+mod edit;
 mod library;
+mod midi;
 mod player;
+mod prefs;
+mod rack;
 mod roll;
 mod seq;
 mod session;
+mod survey;
+mod view;
 #[cfg(test)]
 mod tests;
 
@@ -27,11 +33,16 @@ const USAGE: &str = "FFX Music Studio
 usage:
   ffx-music-studio [--config <demaster.toml>]
       the studio (reads the disc named in demaster.toml)
-  ffx-music-studio [--config <file>] [--open <track>] [--tab roll|mixer|chip|song]
-                   [--seek <tick>] [--paused] [--master <x>]
-      the studio, starting with a track open
+  ffx-music-studio [--config <file>] [--open <track>] [--tab rack|roll|mixer|chip|song]
+                   [--seek <tick>] [--paused] [--master <x>] [--output <x>]
+                   [--channel <ch>] [--hold-key <key>]
+      the studio, starting with a track open (--master: the track's volume;
+      --output: the output volume for this run; --hold-key: a key held on
+      the piano roll's keyboard, for screenshots)
   ffx-music-studio [--config <file>] --list
       the disc's tracks
+  ffx-music-studio [--config <file>] --survey
+      per track: channels with notes, notes, length, bank, the longest samples
   ffx-music-studio [--config <file>] --render <track> <seconds> <out.wav> [edits...]
       renders through the studio's playback path (track: id, musicNNN or part of
       the name). Edits:
@@ -75,7 +86,7 @@ fn run(args: &[String]) -> Result<()> {
     }
     match rest.first().map(String::as_str) {
         None => app::run(config, app::Start::default()),
-        Some(a) if a == "--open" || a == "--tab" || a == "--seek" || a == "--paused" || a == "--master" => {
+        Some(a) if ["--open", "--tab", "--seek", "--paused", "--master", "--output", "--channel", "--hold-key"].contains(&a) => {
             app::run(config, app::Start::parse(&rest)?)
         }
         Some("--list") => {
@@ -86,6 +97,10 @@ fn run(args: &[String]) -> Result<()> {
             Ok(())
         }
         Some("--render") => render(config, &rest[1..]),
+        Some("--survey") => match rest.get(1) {
+            Some(q) => survey::notes(&mut Library::open(config.as_deref())?, q),
+            None => survey::run(&mut Library::open(config.as_deref())?),
+        },
         Some(other) => bail!("unknown argument {other}\n{USAGE}"),
     }
 }

@@ -9,7 +9,8 @@ use std::sync::Arc;
 use demaster::spu2::RATE;
 use demaster::sqseq::{Bgm, Tables, Wd};
 
-use crate::player::Player;
+use crate::player::{Live, Player};
+use demaster::sqseq::TrackMod;
 use crate::seq::tests::bgm;
 use crate::seq::{NoteSpec, Seq};
 use crate::session::Session;
@@ -17,6 +18,12 @@ use crate::session::Session;
 /// A bank of one instrument: a square wave of 28 samples (1714 Hz at key
 /// 60), instant attack, full sustain, fast release.
 fn wd() -> Arc<Wd> {
+    wd_release(0)
+}
+
+/// The same with release rate `rr` (ADSR2 bits 0-4, linear; 0x0c: about
+/// 0.17 s from full level).
+fn wd_release(rr: u32) -> Arc<Wd> {
     let mut b = vec![0u8; 0x20];
     b[..2].copy_from_slice(b"WD");
     b[4..8].copy_from_slice(&16u32.to_le_bytes()); // sample bytes
@@ -26,7 +33,7 @@ fn wd() -> Arc<Wd> {
     b.resize(0x30, 0);
     let mut r = vec![0u8; 0x20];
     r[0..4].copy_from_slice(&0x300u32.to_le_bytes());
-    r[12..16].copy_from_slice(&0x1fc0_000fu32.to_le_bytes());
+    r[12..16].copy_from_slice(&(0x1fc0_000fu32 | (rr & 0x1f) << 16).to_le_bytes());
     r[0x14] = 127;
     r[0x15] = 127;
     r[0x16] = 127;
@@ -331,4 +338,162 @@ fn disc_round_trip_all_tracks() {
     for id in ids {
         disc_round_trip(&mut lib, id, 30.0);
     }
+}
+
+/// RMS of frames `a..b` (s).
+fn rms(x: &[[i16; 2]], a: f64, b: f64) -> f64 {
+    energy(span(x, a, b)).sqrt()
+}
+
+#[test]
+fn pause_lets_the_notes_fade_out() {
+    // track 1's first note sounds 0..0.5 s; pause in the middle of it
+    let mut s = session();
+    s.wd = wd_release(0x0c);
+    s.channels[2].mute = true;
+    let mut p = Player::new(tables(), s.bgm().unwrap(), s.wd.clone(), RATE);
+    p.raw = true;
+    p.set_settings(s.settings());
+    p.restart();
+    let mut a = Vec::new();
+    p.render_i16(12_000, &mut a);
+    let tick = p.song().tick;
+    let before = rms(&a, 0.2, 0.25);
+    assert!(before > 1000.0, "the note sounds: {before}");
+    p.pause();
+    assert!(p.fading());
+    let mut b = Vec::new();
+    p.render_i16(48_000, &mut b);
+    // no step to zero: the first 5 ms after the pause are as loud as before
+    let first = rms(&b, 0.0, 0.005);
+    assert!(first > 0.6 * before, "{first} after {before}");
+    // it decays: each 20 ms quieter than the one before, until silent
+    let w: Vec<f64> = (0..10).map(|i| rms(&b, i as f64 * 0.02, (i + 1) as f64 * 0.02)).collect();
+    for x in w.windows(2) {
+        assert!(x[1] <= x[0] * 1.05 + 1.0, "{w:?}");
+    }
+    assert!(w[2] < 0.8 * w[0] && w[2] > 0.0, "{w:?}");
+    // and reaches silence, the sequence standing still
+    assert_eq!(peak(span(&b, 0.5, 1.0)), 0);
+    assert!(!p.fading(), "the fade ends");
+    assert_eq!(p.song().tick, tick, "the sequence stays at the pause");
+    // resume: on from the same tick, the next note at 1 s of song time
+    p.resume();
+    let mut c = Vec::new();
+    p.render_i16(48_000, &mut c);
+    assert!(p.song().tick > tick + 60);
+    assert!(peak(span(&c, 0.8, 1.0)) > 1000, "the next note plays");
+}
+
+#[test]
+fn stop_fades_a_copy_and_rewinds() {
+    let mut s = session();
+    s.wd = wd_release(0x0c);
+    let mut p = Player::new(tables(), s.bgm().unwrap(), s.wd.clone(), RATE);
+    p.raw = true;
+    let mut a = Vec::new();
+    p.render_i16(12_000, &mut a);
+    let mut tail = p.stop_with_tail();
+    assert_eq!(p.song().tick, 0);
+    let mut b = Vec::new();
+    tail.render_i16(48_000, &mut b);
+    assert!(rms(&b, 0.0, 0.005) > 0.6 * rms(&a, 0.2, 0.25));
+    assert_eq!(peak(span(&b, 0.5, 1.0)), 0);
+    assert!(!tail.fading());
+}
+
+#[test]
+fn channel_levels_follow_the_voices() {
+    let s = session();
+    let mut p = Player::new(tables(), s.bgm().unwrap(), s.wd.clone(), RATE);
+    let mut out = Vec::new();
+    p.render(9600, &mut out);
+    let l = p.take_levels();
+    assert_eq!(l.len(), 3);
+    // track 1 plays from tick 0, track 2 from tick 48 (0.5 s)
+    assert!(l[1] > 0.05, "{l:?}");
+    assert_eq!((l[0], l[2]), (0.0, 0.0));
+    // taken: back to 0 until more is played
+    assert!(p.take_levels().iter().all(|&x| x == 0.0));
+    p.render(24_000, &mut out);
+    assert!(p.take_levels()[2] > 0.05);
+}
+
+#[test]
+fn live_notes_on_a_channel() {
+    let w = wd_release(0x0c);
+    let ram = Arc::new(w.samples.clone());
+    let mut live = Live::new(tables(), w.clone(), ram, 3, RATE);
+    assert!(!live.active());
+    let gain = 1.0 / 32768.0;
+    let m = TrackMod { program: Some(0), ..TrackMod::default() };
+    live.note_on(1, 60, 127, m);
+    assert!(live.active());
+    let mut out = vec![[0f32; 2]; 9600];
+    live.mix(&mut out, gain);
+    let loud = out[4800..].iter().map(|s| s[0].abs()).fold(0.0, f32::max);
+    assert!(loud > 0.05, "the note sounds: {loud}");
+    let l = live.take_levels();
+    assert!(l[1] > 0.05 && l[0] == 0.0, "{l:?}");
+    // half the velocity, about half the level
+    let mut soft = Live::new(tables(), w.clone(), Arc::new(w.samples.clone()), 3, RATE);
+    soft.note_on(1, 60, 63, m);
+    let mut o2 = vec![[0f32; 2]; 9600];
+    soft.mix(&mut o2, gain);
+    let q = o2[4800..].iter().map(|s| s[0].abs()).fold(0.0, f32::max);
+    assert!((q / loud - 0.5).abs() < 0.06, "{q} / {loud}");
+    // key-off: the release, then silence and idle
+    live.note_off(1, 60);
+    let mut out = vec![[0f32; 2]; 48_000];
+    live.mix(&mut out, gain);
+    assert!(out[..240].iter().any(|s| s[0].abs() > 0.02), "the release starts loud");
+    assert!(out[24_000..].iter().all(|s| s[0] == 0.0));
+    assert!(!live.active());
+    // the channel's transpose: an octave up doubles the zero crossings
+    let mut a = Live::new(tables(), w.clone(), Arc::new(w.samples.clone()), 3, RATE);
+    let mut b = Live::new(tables(), w.clone(), Arc::new(w.samples.clone()), 3, RATE);
+    a.note_on(2, 60, 100, m);
+    b.note_on(2, 60, 100, TrackMod { transpose: 12, ..m });
+    let (mut x, mut y) = (vec![[0f32; 2]; 9600], vec![[0f32; 2]; 9600]);
+    a.mix(&mut x, 1.0);
+    b.mix(&mut y, 1.0);
+    let zc = |v: &[[f32; 2]]| v.windows(2).filter(|w| (w[0][0] >= 0.0) != (w[1][0] >= 0.0)).count();
+    let r = zc(&y[2400..]) as f64 / zc(&x[2400..]) as f64;
+    assert!((r - 2.0).abs() < 0.1, "{r}");
+}
+
+#[test]
+fn metronome_clicks_on_the_beats() {
+    let mut s = session();
+    s.channels[1].mute = true;
+    s.channels[2].mute = true;
+    let mut p = Player::new(tables(), s.bgm().unwrap(), s.wd.clone(), RATE);
+    p.set_settings(s.settings());
+    p.restart();
+    p.metronome = true;
+    let mut out = Vec::new();
+    p.render_i16(48_000 * 2, &mut out);
+    // 120 BPM: a click every 0.5 s, silence in between
+    for k in 1..4 {
+        let t = k as f64 * 0.5;
+        assert!(peak(span(&out, t - 0.02, t + 0.03)) > 2000, "click at {t}");
+        assert_eq!(peak(span(&out, t + 0.06, t + 0.4)), 0, "quiet after {t}");
+    }
+    p.metronome = false;
+    let mut out = Vec::new();
+    p.render_i16(48_000, &mut out);
+    // (a click under way finishes)
+    assert_eq!(peak(span(&out, 0.05, 1.0)), 0);
+}
+
+#[test]
+fn export_writes_the_track_once() {
+    let s = session();
+    let path = std::env::temp_dir().join(format!("ffx-studio-export-{}.wav", std::process::id()));
+    let secs = crate::player::export_wav(tables(), s.bgm().unwrap(), s.wd.clone(), s.settings(), &path, 60.0).unwrap();
+    // the song is 4 s (it loops, the export does not), then 2 s of tail
+    assert!((5.9..7.0).contains(&secs), "{secs}");
+    let len = std::fs::metadata(&path).unwrap().len();
+    assert!((len as f64 - (44.0 + secs * 48000.0 * 4.0)).abs() < 100.0, "{len}");
+    std::fs::remove_file(&path).ok();
 }
