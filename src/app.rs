@@ -521,7 +521,7 @@ impl App {
             }
             ui.checkbox(&mut s.looping, "Loop").on_hover_text("Jump back at the end (the song's loop point, or the A-B markers); off: play to the end and stop");
             ui.toggle_value(&mut self.prefs.metronome, "Metronome").on_hover_text("A click on every beat (higher on the bar)");
-            let rec = RichText::new(if self.rec.on { "\u{25cf} Rec" } else { "\u{25cb} Rec" }).color(if self.rec.on { Color32::from_rgb(255, 90, 90) } else { Color32::from_gray(200) });
+            let rec = RichText::new(if self.rec.on { "Rec \u{2022}" } else { "Rec" }).color(if self.rec.on { Color32::from_rgb(255, 90, 90) } else { Color32::from_gray(200) });
             rec_toggle = ui.add(egui::Button::new(rec).selected(self.rec.on)).on_hover_text("Record what you play (MIDI or the piano keys) into the selected channel while the song plays, snapped to the grid").clicked();
             ui.separator();
             let secs = st.frame as f64 / 48000.0;
@@ -572,7 +572,7 @@ impl App {
                     }
                 }
             });
-            if ui.small_button("\u{27f3}").on_hover_text("Look for MIDI devices again").clicked() {
+            if ui.small_button("rescan").on_hover_text("Look for MIDI devices again").clicked() {
                 self.midi_tried = false;
             }
             if let Some(e) = &self.midi_error {

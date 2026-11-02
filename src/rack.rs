@@ -11,7 +11,7 @@ use crate::seq::{Note, PPQN};
 use crate::session::Session;
 use crate::view;
 
-pub const HEADER_W: f32 = 270.0;
+pub const HEADER_W: f32 = 300.0;
 const RULER_H: f32 = 24.0;
 const BAR: u32 = PPQN * 4;
 
@@ -234,14 +234,14 @@ impl RackView {
             hp.rect_filled(bar, 1.0, Color32::from_gray(40));
             let mut fill = bar;
             fill.set_top(bar.bottom() - bar.height() * m);
-            hp.rect_filled(fill, 1.0, if m > 0.95 { Color32::from_rgb(255, 120, 90) } else { col });
+            hp.rect_filled(fill, 1.0, col);
             // number and instrument
             let notes = v.notes.get(c).map_or(0, Vec::len);
             let name_c = if heard { Color32::from_gray(230) } else { Color32::from_gray(110) };
             hp.text(pos2(head.left() + 36.0, head.center().y), Align2::LEFT_CENTER, format!("{c}"), FontId::monospace(14.0), name_c);
             let inst = match (s.channels[c].instrument, v.programs.get(c).copied().flatten()) {
                 (Some((b, i, _)), _) => format!("bank {b} #{i}"),
-                (None, Some(p)) => format!("{} #{p}", s.wd_orig.id),
+                (None, Some(p)) => format!("inst {p} \u{b7} bank {}", s.wd_orig.id),
                 (None, None) => "-".into(),
             };
             let sub = if notes == 0 { "no notes".to_string() } else { format!("{notes} notes") };
