@@ -1,0 +1,27 @@
+[package]
+name = "ffx-music-studio"
+description = "FFX Music Studio: plays and edits the PS2 music of the player's own FFX disc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ffx-music-studio"
+path = "src/main.rs"
+
+[features]
+default = []
+# Sound output on Linux needs ALSA's development files (libasound2-dev);
+# without it the Linux build plays to a silent clock (`--render` works).
+alsa = ["dep:cpal"]
+
+[dependencies]
+demaster = { path = "../converter" }
+ffx-vbf.workspace = true
+anyhow = "1"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+ringbuf = "0.4"
+cpal = { version = "0.18", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+cpal = "0.18"
