@@ -149,6 +149,8 @@ pub struct App {
     lit: Vec<u8>,
     export_rx: Option<Receiver<Result<(PathBuf, f64)>>>,
     hold_key: Option<u8>,
+    /// The roll has a zoom (saved, or fitted once): new tracks keep it.
+    roll_zoom: bool,
 }
 
 impl App {
@@ -177,6 +179,7 @@ impl App {
         let mut rack = RackView::default();
         rack.row_h = prefs.rack_row_h;
         let hold_key = start.hold_key.take();
+        let saved_zoom = prefs.roll_px_per_tick > 0.0;
         App {
             lib: None,
             lib_rx: Some(rx),
@@ -214,6 +217,7 @@ impl App {
             lit: Vec::new(),
             export_rx: None,
             hold_key,
+            roll_zoom: saved_zoom,
         }
     }
 
@@ -731,7 +735,8 @@ impl App {
         self.refresh_notes();
         let Some(s) = self.session.as_mut() else { return Vec::new() };
         if self.fit_pending {
-            self.roll.fit(&self.notes, ui.available_width(), self.prefs.roll_px_per_tick > 0.0);
+            self.roll.fit(&self.notes, ui.available_width(), self.roll_zoom);
+            self.roll_zoom = true;
             self.rack.selected = self.roll.active;
             self.fit_pending = false;
             // the toolbar above was drawn before: once more
@@ -1077,7 +1082,8 @@ impl eframe::App for App {
                         }
                         if let Some(c) = st.channel {
                             self.refresh_notes();
-                            self.roll.fit(&self.notes, 1100.0, self.prefs.roll_px_per_tick > 0.0);
+                            self.roll.fit(&self.notes, 1100.0, self.roll_zoom);
+                            self.roll_zoom = true;
                             self.fit_pending = false;
                             if let Some(t) = self.scroll_to.take() {
                                 self.roll.scroll_tick = t.saturating_sub(PPQN * 4) as f32;
