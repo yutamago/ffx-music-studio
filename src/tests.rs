@@ -239,6 +239,48 @@ fn loop_markers() {
     assert_eq!(peak(span(&out, 5.0, 6.0)), 0);
 }
 
+/// A region with flag 0x10 (banks 143 and 149 on the disc): one long sample
+/// in 0x2000-byte pieces, each ending in loop end + repeat; the driver moves
+/// the loop start on piece by piece, so the sample plays through once.
+#[test]
+fn a_long_sample_in_pieces_plays_through() {
+    let mut b = vec![0u8; 0x20];
+    b[..2].copy_from_slice(b"WD");
+    b[4..8].copy_from_slice(&(3 * 0x2000u32).to_le_bytes());
+    b[8..12].copy_from_slice(&1u32.to_le_bytes());
+    b[12..16].copy_from_slice(&1u32.to_le_bytes());
+    b.extend_from_slice(&0x30u32.to_le_bytes());
+    b.resize(0x30, 0);
+    let mut r = vec![0u8; 0x20];
+    r[0..4].copy_from_slice(&0x310u32.to_le_bytes());
+    r[8..12].copy_from_slice(&0x2000u32.to_le_bytes());
+    r[12..16].copy_from_slice(&0x1fc0_000fu32.to_le_bytes());
+    r[0x14] = 127;
+    r[0x15] = 127;
+    r[0x16] = 127;
+    b.extend(r);
+    // pieces: square wave, silence, square wave (0.3 s each at key 60)
+    for piece in 0..3 {
+        for k in 0..512 {
+            let flags = if k < 511 { 0 } else if piece < 2 { 3 } else { 1 };
+            let mut blk = vec![0x00u8, flags];
+            let (hi, lo) = if piece == 1 { (0, 0) } else { (0x77, 0x99) };
+            blk.extend([hi; 7]);
+            blk.extend([lo; 7]);
+            b.extend(blk);
+        }
+    }
+    let wd = Arc::new(Wd::parse(&b).expect("synthetic WD"));
+    let t1 = vec![(0x20u8, vec![0u8], 0u32), (0x11, vec![60, 127], 192), (0x1a, vec![60], 0), (0x00, vec![], 0)];
+    let song = bgm(0, &[(0, vec![(0x08, vec![120], 192), (0x00, vec![], 0)]), (0, t1)]);
+    let s = Session::new(0, "pieces".into(), &song, wd).unwrap();
+    let out = render(&s, 1.5);
+    assert!(peak(span(&out, 0.05, 0.25)) > 1000, "piece 0");
+    assert_eq!(peak(span(&out, 0.36, 0.55)), 0, "piece 1 is silent");
+    assert!(peak(span(&out, 0.66, 0.85)) > 1000, "piece 2 (looping piece 1 before the fix)");
+    assert_eq!(peak(span(&out, 1.0, 1.5)), 0, "the sample ended");
+}
+
 #[test]
 fn seek_lands_on_the_tick() {
     let s = session();
