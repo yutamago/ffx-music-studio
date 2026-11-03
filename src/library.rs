@@ -64,6 +64,43 @@ impl TrackInfo {
     }
 }
 
+/// Names for the sequences the PC's soundtrack bank does not name, from
+/// where the game plays them and what they match (`docs/music.md`, "Track
+/// notes"); shown with "(proposed)".
+pub const PROPOSED: &[(u16, &str)] = &[
+    (52, "Unused piece, bank not on the disc"),
+    (70, "Nostalgia's notes on a noise bank (unused)"),
+    (71, "Nostalgia's notes, volume 0 (unused)"),
+    (126, "Out of the Frying Pan, other mix (1-12)"),
+    (127, "Battle Theme, other mix (1-09)"),
+    (149, "Hum of the Fayth, temples (1-20)"),
+    (173, "Otherworld, whole recording at 12 kHz (1-05)"),
+    (175, "Start, other mix (3-12)"),
+    (179, "Song of Prayer: Spira, second copy (4-13)"),
+    (180, "Hum of the Fayth (Yuna)"),
+    (181, "Raid, Bevelle (3-14)"),
+    (182, "Test: scale on Yuna's hum (A)"),
+    (183, "Test: scale on Yuna's hum (B)"),
+    (190, "Unused piece 190, bank not on the disc"),
+    (191, "Unused piece 190, variant, bank not on the disc"),
+    (193, "Unused short piece 193, bank not on the disc"),
+    (194, "Unused short piece 194, bank not on the disc"),
+    (195, "Unused short piece 195, bank not on the disc"),
+    (196, "Unused short piece 196, bank not on the disc"),
+    (197, "Unused short piece 197, bank not on the disc"),
+    (198, "Unused short piece 198, bank not on the disc"),
+    (199, "Unused short piece 199, bank not on the disc"),
+    (240, "6 s jingle on bank 0 (unused)"),
+];
+
+/// The list title of a track: the PC bank's name, else a proposed one.
+pub fn track_title(id: u16, pc_name: &str) -> String {
+    if !pc_name.is_empty() {
+        return title(pc_name);
+    }
+    PROPOSED.iter().find(|p| p.0 == id).map_or(String::new(), |p| format!("{} (proposed)", p.1))
+}
+
 /// "1_04_tidus_s_theme" -> "Tidus's Theme (1-04)".
 pub fn title(pc_name: &str) -> String {
     let mut parts = pc_name.splitn(3, '_');
@@ -136,7 +173,7 @@ impl Library {
             .into_iter()
             .map(|id| {
                 let pc_name = TRACKS.iter().find(|t| t.1 == id).map_or("", |t| t.0).to_string();
-                TrackInfo { id, title: if pc_name.is_empty() { String::new() } else { title(&pc_name) }, pc_name }
+                TrackInfo { id, title: track_title(id, &pc_name), pc_name }
             })
             .collect();
         sort_tracks(&mut tracks);
@@ -192,6 +229,15 @@ mod tests {
         assert_eq!(title("2_12_auron_s_theme"), "Auron's Theme (2-12)");
         assert_eq!(title("m_05_the_temple_band"), "The Temple Band (m-05)");
         assert_eq!(title("3_04_sea_of_mists"), "Sea of Mists (3-04)");
+    }
+
+    #[test]
+    fn proposed_titles_for_unnamed_tracks() {
+        assert_eq!(track_title(16, "1_09_battle_theme"), "Battle Theme (1-09)");
+        assert_eq!(track_title(180, ""), "Hum of the Fayth (Yuna) (proposed)");
+        assert_eq!(track_title(5, ""), "");
+        // none of them is a track the PC bank names
+        assert!(PROPOSED.iter().all(|p| !TRACKS.iter().any(|t| t.1 == p.0)));
     }
 
     #[test]
