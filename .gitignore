@@ -1,0 +1,16 @@
+target/
+__pycache__/
+# game data and what the studio makes from it: never in git
+*.iso
+*.vbf
+*.bgm
+*.wd
+*.wav
+*.mid
+*.sf2
+exports/
+export/
+# local settings
+demaster.toml
+ffx-music-studio.toml
+.claude/

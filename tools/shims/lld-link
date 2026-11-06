@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Forwards to the rust-lld that ships with rustc. Ubuntu's lld-link 18 cannot
+# parse the EXPORTAS directive rustc emits for 32-bit stdcall exports.
+# cargo-xwin already passes `-flavor link`; cmake (unicorn's build through
+# tools/build-host.sh) calls the linker without it, so it is added then.
+lld="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
+if [[ "${1:-}" == -flavor ]]; then
+    exec "$lld" "$@"
+fi
+exec "$lld" -flavor link "$@"

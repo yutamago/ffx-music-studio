@@ -1,0 +1,8 @@
+# ffx-demaster and ffx-rust are private: fetch through the git CLI so its
+# credential helper is used.
+[net]
+git-fetch-with-cli = true
+
+# ffx-music-studio.exe runs without the Visual C++ runtime installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

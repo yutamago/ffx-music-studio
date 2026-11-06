@@ -1,0 +1,76 @@
+# CI: the tests on Linux and ffx-music-studio.exe on Windows (artifact
+# `studio`). Needs the secrets FFX_DEMASTER_TOKEN and FFX_RUST_TOKEN for the
+# private git dependencies (README, "CI"). Tests that need the disc skip
+# themselves.
+name: Build
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: private dependencies
+      uses: ./.github/actions/private-deps
+      with:
+        demaster-token: ${{ secrets.FFX_DEMASTER_TOKEN }}
+        rust-token: ${{ secrets.FFX_RUST_TOKEN }}
+
+    - uses: dtolnay/rust-toolchain@stable
+
+    - uses: Swatinem/rust-cache@v2
+
+    # The window (eframe: winit, glutin) builds against these.
+    - name: System libraries
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libwayland-dev libxkbcommon-dev
+
+    - name: Test
+      run: cargo test --locked
+
+  windows:
+    name: Windows build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: private dependencies
+      uses: ./.github/actions/private-deps
+      with:
+        demaster-token: ${{ secrets.FFX_DEMASTER_TOKEN }}
+        rust-token: ${{ secrets.FFX_RUST_TOKEN }}
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-pc-windows-msvc
+
+    - uses: Swatinem/rust-cache@v2
+
+    # --target applies .cargo/config.toml's +crt-static: no Visual C++ runtime needed.
+    - name: Build ffx-music-studio.exe
+      run: cargo build --locked --release --target x86_64-pc-windows-msvc
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: studio
+        path: target/x86_64-pc-windows-msvc/release/ffx-music-studio.exe
+        if-no-files-found: error

@@ -1,9 +1,9 @@
 [package]
 name = "ffx-music-studio"
-description = "FFX Music Studio: plays and edits the PS2 music of the player's own FFX disc"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+description = "FFX Music Studio: plays, edits and exports the PS2 music of the player's own FFX disc"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
 
 [[bin]]
 name = "ffx-music-studio"
@@ -16,9 +16,13 @@ default = []
 alsa = ["dep:cpal", "dep:midir"]
 
 [dependencies]
-demaster = { path = "../converter" }
-ffx-vbf.workspace = true
+# The PS2 sound driver port (sqseq, spu2) and the disc reader live in
+# ffx-demaster's `demaster` crate: one copy of the engine (README, "Engine").
+demaster = { git = "https://github.com/yutamago/ffx-demaster.git", rev = "55772482f2445ac2de9b68f2e56cd5c7db04aed3" }
+# Same rev as ffx-demaster's Cargo.toml.
+ffx-vbf = { git = "https://github.com/yutamago/ffx-rust.git", rev = "681cb391957099939fc181fae122fabca3d4917b" }
 anyhow = "1"
+serde_json = "1"
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 ringbuf = "0.4"
 cpal = { version = "0.18", optional = true }
@@ -27,3 +31,10 @@ midir = { version = "0.11", optional = true }
 [target.'cfg(windows)'.dependencies]
 cpal = "0.18"
 midir = "0.11"
+
+[profile.release]
+opt-level = 3
+
+# Development against a local ffx-demaster checkout (README, "Engine"):
+# [patch."https://github.com/yutamago/ffx-demaster.git"]
+# demaster = { path = "../ffx-demaster/converter" }

@@ -1,0 +1,12 @@
+FFX Music Studio is licensed under either of
+
+  * the Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0), or
+  * the MIT license (https://opensource.org/licenses/MIT)
+
+at your option (SPDX: MIT OR Apache-2.0, as in Cargo.toml).
+
+Copyright (c) <year> <copyright holder: to be filled in>
+
+The full licence texts are to be added. This repository contains code only.
+Final Fantasy X's music, sounds and data are Square Enix's; the studio reads
+them from the player's own disc and none of them is part of this repository.

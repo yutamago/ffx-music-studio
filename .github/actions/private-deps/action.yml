@@ -1,0 +1,41 @@
+# Lets cargo fetch the private git dependencies (ffx-demaster's `demaster`
+# crate and the ffx-rust crates) with the tokens in the FFX_DEMASTER_TOKEN
+# and FFX_RUST_TOKEN secrets: git URL rewrites that carry the tokens, and
+# CARGO_NET_GIT_FETCH_WITH_CLI so cargo fetches through git. Fails with
+# instructions when a secret is missing or can't read its repository.
+name: private dependencies
+description: Lets cargo fetch ffx-demaster and ffx-rust with the FFX_DEMASTER_TOKEN and FFX_RUST_TOKEN secrets
+inputs:
+  demaster-token:
+    description: The FFX_DEMASTER_TOKEN secret
+    required: false
+    default: ""
+  rust-token:
+    description: The FFX_RUST_TOKEN secret
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+  - name: Check the tokens and set up git
+    shell: bash
+    env:
+      DEMASTER_TOKEN: ${{ inputs.demaster-token }}
+      RUST_TOKEN: ${{ inputs.rust-token }}
+    run: |
+      ok=1
+      for pair in "ffx-demaster:FFX_DEMASTER_TOKEN:$DEMASTER_TOKEN" "ffx-rust:FFX_RUST_TOKEN:$RUST_TOKEN"; do
+        repo="${pair%%:*}"; rest="${pair#*:}"; name="${rest%%:*}"; token="${rest#*:}"
+        if [ -z "$token" ]; then
+          echo "::error title=$name is not set::The repository secret $name is missing. Create a fine-grained personal access token (resource owner yutamago, repository access: only yutamago/$repo, permission Contents: Read-only) and add it under Settings > Secrets and variables > Actions as $name (README, CI)."
+          ok=0
+          continue
+        fi
+        git config --global url."https://x-access-token:${token}@github.com/yutamago/${repo}".insteadOf "https://github.com/yutamago/${repo}"
+        if ! git ls-remote "https://github.com/yutamago/${repo}.git" HEAD > /dev/null; then
+          echo "::error title=$name cannot read $repo::git could not read github.com/yutamago/$repo with $name: it needs read-only Contents access to yutamago/$repo and must not have expired (README, CI)."
+          ok=0
+        fi
+      done
+      [ "$ok" = 1 ] || exit 1
+      echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
