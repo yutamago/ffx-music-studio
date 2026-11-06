@@ -133,6 +133,8 @@ pub struct Engine {
     pub late: u64,
     /// How far the song runs behind the host (host samples).
     lookahead: u64,
+    /// The output stage's delay when the stage is off.
+    raw_delay: VecDeque<[i16; 2]>,
 }
 
 fn fresh_master() -> Master {
@@ -175,6 +177,7 @@ impl Engine {
             staged: Vec::new(),
             late: 0,
             lookahead: (LOOKAHEAD_S * sr).round() as u64,
+            raw_delay: VecDeque::from(vec![[0i16; 2]; STAGE_DELAY]),
         }
     }
 
@@ -201,7 +204,7 @@ impl Engine {
 
     /// Host samples from an event to its sound (song start to output).
     pub fn latency(&self) -> u32 {
-        let stage = if self.settings.stage { STAGE_DELAY as f64 / self.step } else { 0.0 };
+        let stage = STAGE_DELAY as f64 / self.step;
         (self.lookahead() as f64 + stage).round() as u32
     }
 
@@ -228,6 +231,7 @@ impl Engine {
         self.header = self.inst.header;
         self.song = Song::external(self.inst.tables.clone(), self.inst.wd.clone(), TRACKS, self.header, &mut self.spu);
         self.master = fresh_master();
+        self.raw_delay = VecDeque::from(vec![[0i16; 2]; STAGE_DELAY]);
         self.tr = Translator::default();
         // the host's tempo until the song's own (the driver would start at
         // 1 BPM)
@@ -344,7 +348,12 @@ impl Engine {
                 }
                 self.out.extend(self.staged.iter().map(|s| [f32::from(s[0]) * g, f32::from(s[1]) * g]));
             } else {
-                self.out.extend(self.scratch.iter().map(|s| [f32::from(s[0]) * g, f32::from(s[1]) * g]));
+                // the same delay as the stage's, so the latency stays
+                for s in &self.scratch {
+                    self.raw_delay.push_back(*s);
+                    let y = self.raw_delay.pop_front().unwrap_or_default();
+                    self.out.push_back([f32::from(y[0]) * g, f32::from(y[1]) * g]);
+                }
             }
             self.chip_end += k as u64;
         }

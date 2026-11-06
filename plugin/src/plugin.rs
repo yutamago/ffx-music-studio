@@ -293,15 +293,11 @@ impl Plugin for FfxSound {
         {
             let mut e = Engine::new(inst, f64::from(self.sr), self.settings());
             e.set_max_block(self.max_block);
-            context.set_latency_samples(e.latency());
             self.engine = Some(e);
         }
         let settings = self.settings();
+        // the latency is the same with the stage on or off (set at activation)
         if let Some(e) = &mut self.engine {
-            if e.settings.stage != settings.stage {
-                e.settings = settings;
-                context.set_latency_samples(e.latency());
-            }
             e.settings = settings;
         }
         // linked instances
