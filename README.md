@@ -538,11 +538,12 @@ chords struck twice; rms difference 10-170 of a signal rms 3500-8000, but
 music017 1364 and music141 10554). `--lockstep` (with a disc source)
 plays the driver from the sequence next to the engine and prints the first
 interrupt whose voices differ. `clap-validator` 0.4.1 on the Windows CLAP:
-28 of 44 tests pass; the four state tests fail the same way for nih-plug's
-own `gain` example (state-invalid-random, state-reproducibility-*); the
-three parameter tests crash (0xc0000005) on Windows only, not with the
-Linux build (likely a background load still running when the validator
-unloads the DLL).
+27-29 of 44 tests pass; the four state tests fail the same way for
+nih-plug's own `gain` example (state-invalid-random,
+state-reproducibility-*); two to four of the parameter tests (param-set-*,
+param-fuzz-*) crash (0xc0000005) on Windows only, a different set from run
+to run, never with the Linux build (likely a bank load still running in
+the background when the validator unloads the DLL).
 
 ## Tests
 
