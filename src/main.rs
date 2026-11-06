@@ -45,9 +45,10 @@ usage:
   ffx-music-studio [--config <file>] --survey
       per track: channels with notes, notes, length, bank, the longest samples
   ffx-music-studio [--config <file>] --export <dir> [--only <track>]... [--no-renders]
-                   [--no-samples] [--loops <n>] [--max-seconds <s>] [--threads <n>]
+                   [--no-samples] [--no-banks] [--loops <n>] [--max-seconds <s>] [--threads <n>]
       the music for other DAWs: MIDI, SoundFonts, WAV samples, reverb impulse
-      responses, reference renders and HOW-TO-OPEN.md (README, \"Export\")
+      responses, reference renders, the banks for FFX PS2 Sound (the plugin)
+      and HOW-TO-OPEN.md (README, \"Export\")
   ffx-music-studio [--config <file>] --render <track> <seconds> <out.wav> [edits...]
       renders through the studio's playback path (track: id, musicNNN or part of
       the name). Edits:
@@ -115,6 +116,7 @@ fn run(args: &[String]) -> Result<()> {
                     }
                     "--no-renders" => o.renders = false,
                     "--no-samples" => o.samples = false,
+                    "--no-banks" => o.banks = false,
                     "--loops" => {
                         o.loops = val(i)?.parse::<usize>()?.max(1);
                         i += 1;

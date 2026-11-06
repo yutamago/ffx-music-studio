@@ -26,6 +26,8 @@ pub struct Opts {
     pub only: Vec<String>,
     pub renders: bool,
     pub samples: bool,
+    /// The banks as on the disc and the driver modules, for FFX PS2 Sound.
+    pub banks: bool,
     /// Loops of a looping track in its reference render.
     pub loops: usize,
     /// Upper bound of a render in seconds.
@@ -35,7 +37,7 @@ pub struct Opts {
 
 impl Default for Opts {
     fn default() -> Self {
-        Opts { only: Vec::new(), renders: true, samples: true, loops: 2, max_seconds: 600.0, threads: 4 }
+        Opts { only: Vec::new(), renders: true, samples: true, banks: true, loops: 2, max_seconds: 600.0, threads: 4 }
     }
 }
 
@@ -130,7 +132,7 @@ pub fn render(tab: Arc<Tables>, bgm: Arc<Bgm>, wd: Arc<Wd>, path: &Path, loops: 
 
 pub fn run(lib: &mut Library, dir: &Path, opts: &Opts) -> Result<()> {
     let t0 = std::time::Instant::now();
-    for d in ["midi", "soundfonts", "reverb", "renders", "samples"] {
+    for d in ["midi", "soundfonts", "reverb", "renders", "samples", "banks"] {
         std::fs::create_dir_all(dir.join(d)).with_context(|| dir.join(d).display().to_string())?;
     }
     let tracks: Vec<TrackInfo> = if opts.only.is_empty() {
@@ -192,6 +194,19 @@ pub fn run(lib: &mut Library, dir: &Path, opts: &Opts) -> Result<()> {
     }
     eprintln!("soundfonts: {} banks, {:.1}s", banks.len(), t0.elapsed().as_secs_f64());
 
+    // for FFX PS2 Sound (the plugin): the banks as on the disc and the
+    // driver modules its tables come from (`Tables::from_irx`)
+    if opts.banks {
+        let bd = dir.join("banks");
+        for (name, f) in [("jppc/irx/iopsound.irx", "iopsound.irx"), ("jppc/irx/libsd.irx", "libsd.irx")] {
+            let b = lib.disc.read(name)?.with_context(|| format!("{name} not on the disc"))?;
+            std::fs::write(bd.join(f), b)?;
+        }
+        for &id in &bank_ids {
+            std::fs::write(bd.join(format!("wd{id:03}.wd")), lib.src.bank_bytes(&mut lib.disc, id)?)?;
+        }
+    }
+
     // reverb impulse responses
     let mut presets = Vec::new();
     for (mode, name) in REVERB_NAMES.iter().enumerate().skip(1) {
@@ -252,6 +267,8 @@ pub fn run(lib: &mut Library, dir: &Path, opts: &Opts) -> Result<()> {
             "timing_max_dev_ms": (info.timing_dev_ms * 10.0).round() / 10.0, "repeats": info.repeats,
             "reverb": REVERB_NAMES.get(mode).copied().unwrap_or("off"),
             "channels": info.tracks.iter().filter(|c| c.notes > 0).count(),
+            "header": {"volume": bgm.volume, "reverb_mode": bgm.reverb_mode, "reverb_depth": bgm.reverb_depth, "flags": bgm.flags},
+            "plugin_unsupported": info.unsupported.iter().map(|(op, n)| format!("0x{op:02x} x{n}")).collect::<Vec<_>>(),
             "ports": info.tracks.iter().map(|c| c.port).max().unwrap_or(0) + 1,
         }));
     }

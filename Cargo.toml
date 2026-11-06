@@ -15,12 +15,20 @@ default = []
 # without it the Linux build plays to a silent clock (`--render` works).
 alsa = ["dep:cpal", "dep:midir"]
 
-[dependencies]
+# `plugin/`: FFX PS2 Sound, the DAW instrument (VST3/CLAP, GPL-3.0-or-later).
+[workspace]
+members = [".", "plugin"]
+
+[workspace.dependencies]
 # The PS2 sound driver port (sqseq, spu2) and the disc reader live in
 # ffx-demaster's `demaster` crate: one copy of the engine (README, "Engine").
-demaster = { git = "https://github.com/yutamago/ffx-demaster.git", rev = "55772482f2445ac2de9b68f2e56cd5c7db04aed3" }
+demaster = { git = "https://github.com/yutamago/ffx-demaster.git", rev = "5be0815d18cf28a619391d1d86491152cf0ee97d" }
 # Same rev as ffx-demaster's Cargo.toml.
 ffx-vbf = { git = "https://github.com/yutamago/ffx-rust.git", rev = "681cb391957099939fc181fae122fabca3d4917b" }
+
+[dependencies]
+demaster = { workspace = true }
+ffx-vbf = { workspace = true }
 anyhow = "1"
 serde_json = "1"
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }

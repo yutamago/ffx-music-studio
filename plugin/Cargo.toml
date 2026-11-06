@@ -1,0 +1,24 @@
+[package]
+name = "ffx-spu2-plugin"
+description = "FFX PS2 Sound: a VST3/CLAP instrument that plays MIDI through FFX's PS2 sound driver and SPU2 model, with the instruments of the player's own disc"
+version = "0.1.0"
+edition = "2024"
+# nih-plug's VST3 bindings are GPL-3.0: this crate is GPL-3.0-or-later (the
+# rest of the repository stays MIT OR Apache-2.0; README, "License").
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[[example]]
+name = "render-midi"
+path = "examples/render_midi.rs"
+
+[dependencies]
+demaster = { workspace = true }
+ffx-vbf = { workspace = true }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }

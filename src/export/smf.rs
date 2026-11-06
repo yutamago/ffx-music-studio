@@ -33,6 +33,9 @@ pub struct SongInfo {
     pub dropped: usize,
     /// Per track: notes, MIDI port, programs used.
     pub tracks: Vec<TrackInfo>,
+    /// Driver commands the FFX PS2 Sound controllers do not carry, with
+    /// counts (none in the disc's music but music240's).
+    pub unsupported: BTreeMap<u8, u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -143,6 +146,77 @@ fn cc(ch: u8, n: u8, v: u8) -> Vec<u8> {
     vec![0xb0 | ch, n, v.min(127)]
 }
 
+/// A 14-bit controller: MSB `n`, LSB `n + 32`.
+fn cc14(ch: u8, n: u8, v: u32) -> [Vec<u8>; 2] {
+    let v = v.min(0x3fff);
+    [cc(ch, n, (v >> 7) as u8), cc(ch, n + 32, (v & 0x7f) as u8)]
+}
+
+/// The controllers FFX PS2 Sound (the plugin, `plugin/src/midi.rs`) plays
+/// the driver's own values from; `HOW-TO-OPEN.md`, "FFX PS2 Sound
+/// controllers". General MIDI synths ignore them.
+mod drv {
+    pub const RESTRIKE: u8 = 3;
+    pub const TRACK_END: u8 = 9;
+    pub const VEL0: u8 = 13;
+    pub const DOUBLE: u8 = 12;
+    pub const PLFO_DELAY_AFTER: u8 = 57;
+    pub const PLFO_FADE_AFTER: u8 = 58;
+    pub const HDR_DEPTH: u8 = 14;
+    pub const SONG_END: u8 = 15;
+    pub const VOLUME: u8 = 20;
+    pub const EXPRESSION: u8 = 21;
+    pub const PAN: u8 = 22;
+    pub const TEMPO: u8 = 23;
+    pub const DEPTH: u8 = 24;
+    pub const MIX: u8 = 25;
+    pub const TIE: u8 = 26;
+    pub const PORTA: u8 = 27;
+    pub const SLIDE_TIME: u8 = 28;
+    pub const SLIDE_TO: u8 = 29;
+    pub const DETUNE: u8 = 30;
+    pub const SCALE: u8 = 31;
+    pub const VOICE_FLAG_20: u8 = 85;
+    pub const VOICE_FLAG_10: u8 = 86;
+    pub const VOICE_START: u8 = 87;
+    pub const HDR_VOLUME: u8 = 88;
+    pub const HDR_REVERB: u8 = 89;
+    pub const HDR_FLAGS: u8 = 90;
+    pub const ADSR: u8 = 102;
+    pub const ADSR_RESET: u8 = 110;
+    pub const PLFO_DELAY: u8 = 112;
+    pub const PLFO_FADE: u8 = 113;
+    pub const PLFO_DEPTH: u8 = 114;
+    pub const PLFO_RATE: u8 = 115;
+    pub const PLFO_WAVE: u8 = 116;
+    pub const PANLFO_DEPTH: u8 = 117;
+    pub const PANLFO_RATE: u8 = 118;
+    pub const PANLFO_WAVE: u8 = 119;
+    pub const LFO_OFF: u8 = 127;
+}
+
+/// The mix switches (`0x60`-`0x62`) as the plugin's bits: 0/1 dry left and
+/// right, 2/3 wet left and right (the driver's voice flags `0x3c00 >> 10`).
+fn mix_bits(op: u8, a: u32, b: u32) -> u8 {
+    match op {
+        0x60 => 0xf,
+        0x61 => 0x3,
+        _ => {
+            let l = match a {
+                1 => 0b0100,
+                2 => 0b0101,
+                _ => 0b0001,
+            };
+            let r = match b {
+                1 => 0b1000,
+                2 => 0b1010,
+                _ => 0b0010,
+            };
+            l | r
+        }
+    }
+}
+
 /// The song's volume factor (`(sv + 1) / 512` of the driver's volume).
 fn song_gain(bgm: &Bgm) -> f64 {
     let sv = (i32::from(bgm.volume & 0x7f) + 1) * 0x1ff >> 7;
@@ -210,6 +284,31 @@ pub fn build(bgm: &Bgm, bank: u16, log: &[LogEntry], title: &str, prog_name: &dy
         tr.push(0, 0, cc(ch, 10, 64));
         tr.push(0, 0, cc(ch, 91, 0));
     }
+    // the song's header for FFX PS2 Sound, on the first channel with notes
+    // (which also carries the song's tempo and reverb depth)
+    let gt = has_notes.iter().position(|&h| h);
+    if let Some(g) = gt {
+        let ch = chans[g].0;
+        let tr = &mut tracks[g];
+        tr.push(0, 0, cc(ch, drv::HDR_VOLUME, bgm.volume & 0x7f));
+        tr.push(0, 0, cc(ch, drv::HDR_REVERB, if bgm.reverb_mode < 10 { bgm.reverb_mode } else { 127 }));
+        for b in cc14(ch, drv::HDR_DEPTH, (bgm.reverb_depth.max(0) as u32) / 2) {
+            tr.push(0, 0, b);
+        }
+        tr.push(0, 0, cc(ch, drv::HDR_FLAGS, if bgm.flags & 0x10000 != 0 { 127 } else { 0 }));
+    }
+    let song_end = if bgm.loops() { None } else { log.iter().rposition(|e| e.event == SeqEvent::End) };
+    // per track: detune and pitch scale now (0x5b, 0x59 add to them)
+    let mut detune = vec![0i16; n];
+    let mut scale = vec![0i8; n];
+    let mut tempo_now = 1u8;
+    // re-strikes: (track, tick, key) where a sounding key was keyed on again
+    let mut restrikes: std::collections::BTreeSet<(usize, u64, u8)> = Default::default();
+    // the driver's order of the key-ons in a tick (it decides which voice
+    // each note gets): the file keeps it
+    let mut key_on_order: BTreeMap<(usize, u64, u8), usize> = BTreeMap::new();
+    let mut vel0: std::collections::BTreeSet<(usize, u64, u8)> = Default::default();
+    let mut doubles: std::collections::BTreeSet<(usize, u64, u8)> = Default::default();
     let end_note = |notes: &mut Vec<(u64, u64, u8, u8)>, s: &mut BTreeMap<u8, (u64, u8)>, key: u8, at: u64| {
         if let Some((st, v)) = s.remove(&key)
             && at > st
@@ -217,20 +316,41 @@ pub fn build(bgm: &Bgm, bank: u16, log: &[LogEntry], title: &str, prog_name: &dy
             notes.push((st, at, key, v));
         }
     };
-    for e in log {
+    let gch = gt.map(|g| chans[g].0);
+    for (i, e) in log.iter().enumerate() {
         let (t, at) = (e.track, e.tick);
         match e.event {
             SeqEvent::Tempo(b) if b > 0 => {
                 conductor.meta(at, 0x51, &(60_000_000u32 / u32::from(b)).to_be_bytes()[1..]);
                 info.tempos.push((at, b));
+                tempo_now = b;
+                if let (Some(g), Some(ch)) = (gt, gch) {
+                    for m in cc14(ch, drv::TEMPO, u32::from(b)) {
+                        tracks[g].push(at, 2, m);
+                    }
+                }
             }
-            SeqEvent::Depth(d) => info.depths.push((at, d)),
+            SeqEvent::Depth(d) => {
+                info.depths.push((at, d));
+                let slide = log.get(i + 1).is_some_and(|x| matches!(x.event, SeqEvent::Raw { op: 0x0b, .. }));
+                if let (Some(g), Some(ch), false) = (gt, gch, slide) {
+                    for m in cc14(ch, drv::DEPTH, u32::from(d as u8)) {
+                        tracks[g].push(at, 2, m);
+                    }
+                }
+            }
             SeqEvent::LoopPoint => {
                 info.loop_start = Some(at);
                 conductor.meta(at, 0x06, b"loopStart");
                 for (ti, tr) in tracks.iter_mut().enumerate() {
                     if has_notes[ti] {
                         tr.push(at, 0, cc(chans[ti].0, 111, 0));
+                    }
+                }
+                // the tempo the driver goes back to at the jump
+                if let (Some(g), Some(ch)) = (gt, gch) {
+                    for m in cc14(ch, drv::TEMPO, u32::from(tempo_now)) {
+                        tracks[g].push(at, 2, m);
                     }
                 }
             }
@@ -247,6 +367,19 @@ pub fn build(bgm: &Bgm, bank: u16, log: &[LogEntry], title: &str, prog_name: &dy
             }
             _ => {}
         }
+        if Some(i) == song_end
+            && let (Some(g), Some(ch)) = (gt, gch)
+        {
+            // the song's end: every voice let go (pedal too)
+            tracks[g].push(at, 4, cc(ch, drv::SONG_END, 127));
+            for t in 0..n {
+                let keys: Vec<u8> = sounding[t].keys().copied().collect();
+                for k in keys {
+                    end_note(&mut notes[t], &mut sounding[t], k, at);
+                }
+            }
+        }
+        // a track without notes: nothing it does is heard
         if t >= n || !has_notes[t] {
             continue;
         }
@@ -260,21 +393,33 @@ pub fn build(bgm: &Bgm, bank: u16, log: &[LogEntry], title: &str, prog_name: &dy
                 let midi_s = tick_seconds(at, &info.tempos);
                 let drv_s = e.frame as f64 / 48000.0;
                 info.timing_dev_ms = info.timing_dev_ms.max((midi_s - drv_s).abs() * 1000.0);
-                // velocity 0 is full volume in the driver
+                // velocity 0 is full volume in the driver (FFX PS2 Sound gets
+                // the 0 from a controller: it picks the region by velocity)
+                if vel == 0 {
+                    vel0.insert((t, at, key));
+                }
                 let vel = if vel == 0 || vel > 127 { 127 } else { vel };
                 if tie[t] && !sounding[t].is_empty() {
-                    // tied: the voice moves on to the new key
-                    if sounding[t].contains_key(&key) {
-                        continue;
-                    }
-                    let keys: Vec<u8> = sounding[t].keys().copied().collect();
+                    // tied: the voice moves on to the new key (the same key:
+                    // set up again, as a re-strike below)
+                    let keys: Vec<u8> = sounding[t].keys().copied().filter(|&k| k != key).collect();
                     for k in keys {
                         end_note(&mut notes[t], &mut sounding[t], k, at);
                     }
                 }
-                // the same key again: the old note ends with it
+                // the same key again: the old note ends with it in the file
+                // (the driver's old voice sounds on: a re-strike)
+                if let Some(&(st, _)) = sounding[t].get(&key) {
+                    if st == at {
+                        // keyed on twice in one tick: two voices
+                        doubles.insert((t, at, key));
+                    } else {
+                        restrikes.insert((t, at, key));
+                    }
+                }
                 end_note(&mut notes[t], &mut sounding[t], key, at);
                 sounding[t].insert(key, (at, vel));
+                key_on_order.entry((t, at, key)).or_insert(i);
             }
             SeqEvent::NoteOff { key } => {
                 // a key-off in the same tick as its key-on: never sounds
@@ -295,7 +440,10 @@ pub fn build(bgm: &Bgm, bank: u16, log: &[LogEntry], title: &str, prog_name: &dy
                     info.dropped += 1;
                 }
             }
-            SeqEvent::Tie(on) => tie[t] = on,
+            SeqEvent::Tie(on) => {
+                tie[t] = on;
+                tr.push(at, 2, cc(ch, drv::TIE, if on { 127 } else { 0 }));
+            }
             SeqEvent::Program(p) => {
                 has_prog[t] = true;
                 tr.push(at, 2, cc(ch, 0, msb));
@@ -311,19 +459,92 @@ pub fn build(bgm: &Bgm, bank: u16, log: &[LogEntry], title: &str, prog_name: &dy
                 tr.push(at, 2, vec![0xe0 | ch, (v & 0x7f) as u8, (v >> 7) as u8]);
             }
             SeqEvent::BendRange(r) => {
-                for b in [cc(ch, 101, 0), cc(ch, 100, 0), cc(ch, 6, r.unsigned_abs()), cc(ch, 38, 0), cc(ch, 101, 127), cc(ch, 100, 127)] {
-                    tr.push(at, 2, b);
+                // data entry MSB: the range; LSB: the byte's top bit (FFX PS2
+                // Sound; General MIDI reads it as cents, 0 here)
+                let b = r as u8;
+                for m in [cc(ch, 101, 0), cc(ch, 100, 0), cc(ch, 6, b & 0x7f), cc(ch, 38, b >> 7), cc(ch, 101, 127), cc(ch, 100, 127)] {
+                    tr.push(at, 2, m);
                 }
             }
-            SeqEvent::Volume(v) => tr.push(at, 2, cc(ch, 7, (127.0 * f64::from(v) / 16383.0 * gain).round() as u8)),
-            SeqEvent::Expression(v) => tr.push(at, 2, cc(ch, 11, (127.0 * f64::from(v) / 16383.0).round() as u8)),
-            SeqEvent::Pan(p) => tr.push(at, 2, cc(ch, 10, (p - 0x40).clamp(0, 127) as u8)),
-            SeqEvent::Wet(on) => tr.push(at, 2, cc(ch, 91, if on { 127 } else { 0 })),
-            SeqEvent::End => {
-                let keys: Vec<u8> = sounding[t].keys().copied().collect();
-                for k in keys {
-                    end_note(&mut notes[t], &mut sounding[t], k, at);
+            SeqEvent::Volume(v) => {
+                tr.push(at, 2, cc(ch, 7, (127.0 * f64::from(v) / 16383.0 * gain).round() as u8));
+                for m in cc14(ch, drv::VOLUME, v.clamp(0, 0x3fff) as u32) {
+                    tr.push(at, 2, m);
                 }
+            }
+            SeqEvent::Expression(v) => {
+                tr.push(at, 2, cc(ch, 11, (127.0 * f64::from(v) / 16383.0).round() as u8));
+                for m in cc14(ch, drv::EXPRESSION, v.clamp(0, 0x3fff) as u32) {
+                    tr.push(at, 2, m);
+                }
+            }
+            SeqEvent::Pan(p) => {
+                tr.push(at, 2, cc(ch, 10, (p - 0x40).clamp(0, 127) as u8));
+                for m in cc14(ch, drv::PAN, (p + 0x1f80).clamp(0, 0x3fff) as u32) {
+                    tr.push(at, 2, m);
+                }
+            }
+            SeqEvent::Wet(on) => tr.push(at, 2, cc(ch, 91, if on { 127 } else { 0 })),
+            SeqEvent::Raw { op, args } => {
+                let [a, b, c] = args;
+                let byte = |x: u32| (x & 0xff) as u8;
+                let mut out: Vec<Vec<u8>> = Vec::new();
+                match op {
+                    0x60..=0x62 => out.push(cc(ch, drv::MIX, mix_bits(op, a, b))),
+                    0x28 => out.extend(cc14(ch, drv::PORTA, a.min(0x3ffe))),
+                    0x29 => out.extend(cc14(ch, drv::PORTA, 0x3fff)),
+                    0x2c => {
+                        out.extend(cc14(ch, drv::SLIDE_TIME, a));
+                        out.extend(cc14(ch, drv::SLIDE_TO, b & 0xff));
+                    }
+                    0x58 | 0x59 => {
+                        scale[t] = if op == 0x58 { byte(a) as i8 } else { scale[t].wrapping_add(byte(a) as i8) };
+                        out.extend(cc14(ch, drv::SCALE, u32::from(scale[t] as u8)));
+                    }
+                    0x5a | 0x5b => {
+                        let d = i16::from(byte(a) as i8) << 8;
+                        detune[t] = if op == 0x5a { (u16::from(byte(a)) << 8) as i16 } else { detune[t].wrapping_add(d) };
+                        out.extend(cc14(ch, drv::DETUNE, u32::from((detune[t] >> 8) as u8)));
+                    }
+                    0x3e => out.push(cc(ch, drv::VOICE_FLAG_20, byte(a).min(127))),
+                    0x3f => out.push(cc(ch, drv::VOICE_FLAG_10, byte(a).min(127))),
+                    0x3d => out.push(cc(ch, drv::VOICE_START, byte(a).min(127))),
+                    0x30 => out.push(cc(ch, drv::ADSR_RESET, 0)),
+                    0x31..=0x38 if a < 128 => out.push(cc(ch, drv::ADSR + (op - 0x31), byte(a))),
+                    0x47 if a < 128 && b < 128 => {
+                        // after a 0x40 of the same tick: the voices kept the
+                        // old delay (the plugin plays these after the start)
+                        let after = log[..i].iter().rev().take_while(|x| x.tick == at).any(|x| {
+                            x.track == t && matches!(x.event, SeqEvent::Raw { op: 0x40, .. })
+                        });
+                        let (d, f) = if after { (drv::PLFO_DELAY_AFTER, drv::PLFO_FADE_AFTER) } else { (drv::PLFO_DELAY, drv::PLFO_FADE) };
+                        out.push(cc(ch, d, byte(a)));
+                        out.push(cc(ch, f, byte(b)));
+                    }
+                    0x40 if a < 128 && b < 128 && c < 16 => {
+                        out.push(cc(ch, drv::PLFO_DEPTH, byte(a)));
+                        out.push(cc(ch, drv::PLFO_RATE, byte(b)));
+                        out.push(cc(ch, drv::PLFO_WAVE, byte(c)));
+                    }
+                    0x41 => out.push(cc(ch, drv::PLFO_WAVE, drv::LFO_OFF)),
+                    0x50 if a < 128 && b < 128 && c < 16 => {
+                        out.push(cc(ch, drv::PANLFO_DEPTH, byte(a)));
+                        out.push(cc(ch, drv::PANLFO_RATE, byte(b)));
+                        out.push(cc(ch, drv::PANLFO_WAVE, byte(c)));
+                    }
+                    0x51 => out.push(cc(ch, drv::PANLFO_WAVE, drv::LFO_OFF)),
+                    // the volume LFO changes nothing the voices play
+                    0x48 | 0x49 | 0x4f => {}
+                    _ => *info.unsupported.entry(op).or_default() += 1,
+                }
+                for m in out {
+                    tr.push(at, 2, m);
+                }
+            }
+            SeqEvent::End => {
+                // the driver keys off the track's current key (logged before)
+                // and lets the other voices sound on
+                tr.push(at, 4, cc(ch, drv::TRACK_END, 127));
             }
             _ => {}
         }
@@ -341,7 +562,17 @@ pub fn build(bgm: &Bgm, bank: u16, log: &[LogEntry], title: &str, prog_name: &dy
     let mut file_end = fin;
     for t in 0..n {
         let ch = chans[t].0;
+        notes[t].sort_by_key(|&(st, _, key, _)| (st, key_on_order.get(&(t, st, key)).copied().unwrap_or(0)));
         for &(st, en, key, vel) in &notes[t] {
+            if restrikes.contains(&(t, st, key)) {
+                tracks[t].push(st, 2, cc(ch, drv::RESTRIKE, key));
+            }
+            if vel0.contains(&(t, st, key)) {
+                tracks[t].push(st, 2, cc(ch, drv::VEL0, key));
+            }
+            if doubles.contains(&(t, st, key)) {
+                tracks[t].push(st, 2, cc(ch, drv::DOUBLE, key));
+            }
             tracks[t].push(st, 3, vec![0x90 | ch, key, vel]);
             tracks[t].push(en, 0, vec![0x80 | ch, key, 0]);
             file_end = file_end.max(en);

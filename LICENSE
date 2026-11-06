@@ -5,8 +5,17 @@ FFX Music Studio is licensed under either of
 
 at your option (SPDX: MIT OR Apache-2.0, as in Cargo.toml).
 
+Exception: the plugin crate in `plugin/` (FFX PS2 Sound, `ffx-spu2-plugin`)
+is licensed under the GNU General Public License, version 3 or (at your
+option) any later version (SPDX: GPL-3.0-or-later,
+https://www.gnu.org/licenses/gpl-3.0.html), because it links the VST3
+bindings of nih-plug, which are GPL-3.0. Its builds (the .vst3 and .clap
+bundles) are GPL-3.0-or-later as a whole. The rest of the repository stays
+MIT OR Apache-2.0.
+
 Copyright (c) <year> <copyright holder: to be filled in>
 
 The full licence texts are to be added. This repository contains code only.
-Final Fantasy X's music, sounds and data are Square Enix's; the studio reads
-them from the player's own disc and none of them is part of this repository.
+Final Fantasy X's music, sounds and data are Square Enix's; the studio and
+the plugin read them from the player's own disc and none of them is part
+of this repository.

@@ -354,6 +354,7 @@ Ableton Live and plain SoundFont players, and a table of the tracks.
   reverb.json                       per track: preset, effect volume, its changes; preset registers
   tracks.json                       per track: SoundFont, banks, tempo, loop, length, channels
   renders/musicNNN-<name>.wav       the engine's own render, to compare a DAW with
+  banks/wdBBB.wd, *.irx             the banks as on the disc and the driver modules, for FFX PS2 Sound
 ```
 
 **MIDI** (`src/export/smf.rs`). The song runs through the driver itself
@@ -463,6 +464,85 @@ bank: 0.92). FluidSynth's own MIDI player drifts up to 50 ms over Game
 Over's tempo changes, where the tempo map itself is within 4 ms of the
 driver. Every MIDI file parses with `mido`, every SoundFont with
 `sf2utils`.
+
+## FFX PS2 Sound (the DAW plugin)
+
+`plugin/` (crate `ffx-spu2-plugin`, GPL-3.0-or-later: "License") is a
+VST3 and CLAP instrument, built with nih-plug, that plays MIDI through the
+driver and the chip of the studio, so the exported MIDI files sound in a
+DAW as in the studio. It ships no game data: it reads the banks from the
+disc (a `demaster.toml` / `ffx-music-studio.toml` / `ffx-ps2-sound.toml`)
+or from an export folder's `banks/` (`--export` writes them; `--no-banks`
+leaves them out). Setup for users, FL Studio routing and the controller
+table: `HOW-TO-OPEN.md` of an export ("FFX PS2 Sound").
+
+```bash
+cargo build --release -p ffx-spu2-plugin                 # Linux .so (CLAP)
+tools/build-plugin-windows.sh                            # target/bundled/FFX PS2 Sound.{vst3,clap} (cargo-xwin)
+cargo run --release -p ffx-spu2-plugin --example render-midi -- \
+  --source <export dir|toml> --track 16 <export>/midi/music016-battle-theme-1-09.mid \
+  --compare <export>/renders/music016-battle-theme-1-09.wav [--until <loop end s>]
+```
+
+**How it plays** (`plugin/src/engine.rs`, `midi.rs`):
+
+- ffx-demaster's `sqseq::Song::external` is the driver without sequence
+  data: 48 tracks (3 MIDI ports of 16 channels; the export puts a song's
+  16th and later channels on the next port) whose commands come from
+  `Song::ext_command(tick, track, bytes)` and run in the track's turn of
+  that tick, as if they stood in the sequence; `EXT_*` pseudo commands set
+  volume, expression, pan and the mix switches to the values the driver's
+  slides reach. The SPU2, its reverb and the studio's output stage
+  (`musicjob::Master`) follow as in the player.
+- **The MIDI** (`midi.rs`): each event's tick is the host position at the
+  event (48 ticks a quarter note); everything one channel gets in one
+  tick is gathered and turned into commands in a fixed order (header and
+  song values, program, envelope, mix, pitch, LFOs, tie, key-offs,
+  key-ons, end), so the order a DAW plays a tick's events in does not
+  matter. The export writes the driver's own values as controllers of
+  their own next to the General MIDI ones (table in `HOW-TO-OPEN.md`);
+  without them CC 7/10/11/91 are used.
+- **Timing**: the driver runs its own 240 Hz interrupts and its tempo
+  counter (tempo source *Sequence*, the default: the song's tempo
+  controller) or counts the host's ticks (*Host*). The song starts 25 ms
+  (at least two host buffers) after the transport, so each event is there
+  before the driver plays its tick (a DAW plays an event at its exact
+  time; the driver in the interrupt after it); the plugin reports that
+  latency, plus the output stage's 96 frames.
+- **Loops and seeks**: a jump of the host's position keeps the driver
+  running (the ticks after the jump continue its count), as the PS2 does
+  at its loop point; transport stop releases every voice; with the
+  transport stopped, notes play at the next interrupt (a MIDI keyboard).
+- **Linked instances** (parameters *Part* and *Link*): instances in one
+  link group play on the chip of the *Part 1* instance; the others send it
+  their MIDI and are silent.
+- Other sample rates than 48 kHz: the chip's output is resampled linearly.
+
+**Export changes for it** (`src/export/smf.rs`): every command of the
+driver's log that sounds goes into the file (`SeqEvent::Raw` for the ones
+without a typed event); the key-ons of one tick keep the driver's order
+(it decides which voice a note gets); a re-strike of a sounding key, a key
+struck twice in a tick and velocity 0 are marked; a track's end no longer
+ends its other sounding notes (the driver lets them sound to the song's
+end); a tied note on the same key is set up again (detune, velocity).
+
+**Checked** (`render-midi`, blocks of 512 samples, 48 kHz, against the
+export's reference renders, looping tracks up to their loop end): Battle
+Theme, Mi'ihen Road, Besaid, Zanarkand, Game Over and music240 (counted
+loops, ties, pitch slides, detune, envelope changes) are sample-identical
+(max difference 0), also with blocks of 441. Of the 102 sequences with a
+bank on the disc, 92 are sample-identical; the other 10 differ from a
+voice assignment on (`music014`, `017`, `029`, `050`, `131`, `133`, `141`,
+`166`, `175`, `181`: keys struck twice in one tick with two velocities, and
+chords struck twice; rms difference 10-170 of a signal rms 3500-8000, but
+music017 1364 and music141 10554). `--lockstep` (with a disc source)
+plays the driver from the sequence next to the engine and prints the first
+interrupt whose voices differ. `clap-validator` 0.4.1 on the Windows CLAP:
+28 of 44 tests pass; the four state tests fail the same way for nih-plug's
+own `gain` example (state-invalid-random, state-reproducibility-*); the
+three parameter tests crash (0xc0000005) on Windows only, not with the
+Linux build (likely a background load still running when the validator
+unloads the DLL).
 
 ## Tests
 
@@ -578,6 +658,8 @@ Without them the jobs stop at "private dependencies" with a message.
 
 ## License
 
-MIT OR Apache-2.0 (as `Cargo.toml` says). Copyright holder: to be filled
+MIT OR Apache-2.0 (as `Cargo.toml` says), except the plugin crate
+`plugin/` (FFX PS2 Sound): GPL-3.0-or-later, because nih-plug's VST3
+bindings are GPL-3.0 (`LICENSE`). Copyright holder: to be filled
 in. The licence texts are not in the repository yet. The game's music and
 sounds are Square Enix's and are never part of this repository.

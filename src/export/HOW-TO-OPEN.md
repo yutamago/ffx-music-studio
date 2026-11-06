@@ -13,6 +13,7 @@ own PS2 disc of Final Fantasy X. It is for your own use: don't share it.
 | `reverb.json` | per track: reverb preset, effect volume and its changes; per preset its registers |
 | `tracks.json` | per track: SoundFont, bank, tempo, loop, length, channels |
 | `renders/musicNNN-<name>.wav` | the PS2 sound engine's own render (intro and two passes of the loop, or once through and 2 s of tail): the reference to compare your DAW with |
+| `banks/` | the banks as on the disc (`wdBBB.wd`) and the two driver modules (`iopsound.irx`, `libsd.irx`) for **FFX PS2 Sound**, the VST3/CLAP instrument (below) |
 
 ## Which SoundFont goes with which MIDI file
 
@@ -124,6 +125,83 @@ program changes, so:
   keyboard.
 - **sforzando** (standalone or plugin): loads one `.sf2` and plays the MIDI
   from your host.
+
+## FFX PS2 Sound: the PS2 sound in any DAW
+
+FFX PS2 Sound (a VST3 and CLAP instrument, from FFX Music Studio's
+`plugin/`) plays these MIDI files through the PS2 driver itself and its
+SPU2 model: the same code as the renders in `renders/`, so a MIDI file
+played from its start sounds like the render sample for sample (checked
+offline; looping files up to the loop end). Set it up:
+
+1. Copy `FFX PS2 Sound.vst3` (the whole folder) to
+   `C:\Program Files\Common Files\VST3\`, or `FFX PS2 Sound.clap` to
+   `C:\Program Files\Common Files\CLAP\`, and rescan plugins.
+2. Its source: it finds this export folder by itself when the plugin file
+   sits in it or in a folder inside it (`<export>\plugin\`); else put an
+   `ffx-ps2-sound.toml` (a `demaster.toml` with `[source] iso = '...'` and
+   `game = '...'`, or just copy the studio's) next to the plugin file or in
+   `%APPDATA%\FFX PS2 Sound\`, or set the environment variable
+   `FFX_PS2_SOUND` to this folder or to that file.
+3. Parameter **Track**: the music id (the table's `musicNNN`): its bank,
+   song volume and reverb. **Track 0** plays the bank given by **Bank**
+   (the table's SF2/MIDI bank number).
+4. Send all of a file's MIDI channels to **one** instance (they share 48
+   voices and one reverb, as on the PS2). Files marked "(2 ports)" or more
+   need a second (third) instance with **Part** 2 (3) for the next port's
+   channels and the same **Link** group on all of them (not 0); the Part 1
+   instance sounds, the others are silent.
+5. **Tempo**: *Sequence* (default) times the music with the song's own
+   tempo controller (CC 23), exactly as the PS2; *Host* follows the DAW's
+   tempo (change the tempo only with Host). **PS2 output stage**: the
+   +9 dB and limiter of the renders. The plugin reports a latency of about
+   25 ms (more with large audio buffers); DAWs compensate it.
+
+**FL Studio:** import the MIDI file (*File > Import > MIDI file*, with
+controllers), add one FFX PS2 Sound and route every imported channel to
+it: each channel's *MIDI Out* (or the channel settings' *Channel* /
+*Port*) to the plugin's MIDI port, or put the plugin in a *Patcher* and
+connect them there. Alternatively one instance per channel works too
+(each with its own chip and reverb: not exact, voices are counted per
+instance). Pitch bend needs no setup (the files set the range by RPN 0).
+
+### FFX PS2 Sound controllers
+
+Next to the General MIDI controllers, every channel carries the driver's
+own values. General MIDI synths ignore them; FFX PS2 Sound plays them
+instead of CC 7/10/11/91 (14-bit values: MSB, then LSB at CC + 32). All
+of one tick are gathered and played in a fixed order, so the order a DAW
+plays them in does not matter.
+
+| CC | value | driver command |
+|---|---|---|
+| 88, 89, 90 | song volume, reverb mode (10+: off), header flag 0x10000 (64+) | the sequence header (tick 0, first channel) |
+| 14/46 | header reverb depth / 2 | header |
+| 23/55 | tempo, BPM | `0x08` (first channel; also at the loop start) |
+| 24/56 | reverb depth byte | `0x0a` |
+| program change | instrument | `0x20` |
+| 110 | any | `0x30` envelope reset |
+| 102..109 | envelope value | `0x31`..`0x38` envelope overrides |
+| 20/52, 21/53 | volume, expression `0..0x3fff` (every tick of a slide) | `0x22`-`0x25` |
+| 22/54 | pan position + 0x1f80 (0x2000 = centre) | `0x26`, `0x27` |
+| 25 | mix: bit 0/1 dry L/R, 2/3 wet L/R | `0x60`-`0x62` |
+| 64 | sustain pedal | `0x3c` |
+| RPN 0 (CC 6, 38) | bend range byte (38: its top bit) | `0x5d` |
+| pitch bend | 14 bit | `0x5c` |
+| 30/62, 31/63 | detune byte, pitch scale byte (absolute) | `0x5a`/`0x5b`, `0x58`/`0x59` |
+| 85, 86, 87 | voice flags `0x3e`, `0x3f`, first voice `0x3d` | |
+| 27/59 | portamento time in ticks (0x3fff: off) | `0x28`, `0x29` |
+| 28/60, 29/61 | pitch slide ticks, target byte (29 starts it) | `0x2c` |
+| 112, 113 | pitch LFO delay, fade (113 sets them) | `0x47` |
+| 57, 58 | the same, set after the tick's LFO start | `0x47` after `0x40` |
+| 114, 115, 116 | pitch LFO depth, rate, wave (116 starts it; 127: off) | `0x40`, `0x41` |
+| 117, 118, 119 | pan LFO depth, rate, wave (119 starts it; 127: off) | `0x50`, `0x51` |
+| 26 | tie (64+ on) | `0x2a`, `0x2b` |
+| 3 | key: this tick's note-off of the key is a re-strike (the old voice sounds on) | key-on without key-off |
+| 12 | key: keyed on twice in this tick (two voices) | |
+| 13 | key: the note-on has velocity 0 (full volume; region chosen by velocity 0) | |
+| 9 | track end | `0x00` |
+| 15 | song end: every voice let go | the last `0x00` of a song without loop |
 
 ## Known differences to the PS2
 
