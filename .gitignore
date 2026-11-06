@@ -8,8 +8,8 @@ __pycache__/
 *.wav
 *.mid
 *.sf2
-exports/
-export/
+/exports/
+/export/
 # local settings
 demaster.toml
 ffx-music-studio.toml

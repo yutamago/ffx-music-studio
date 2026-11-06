@@ -539,3 +539,87 @@ fn export_writes_the_track_once() {
     assert!((len as f64 - (44.0 + secs * 48000.0 * 4.0)).abs() < 100.0, "{len}");
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn midi_export_follows_the_driver() {
+    use crate::export::smf;
+    let b = Arc::new(Bgm::parse(&song()).unwrap());
+    let log = smf::run_log(tables(), b.clone(), wd(), 100_000);
+    let (bytes, info) = smf::build(&b, 3, &log, "test", &|p| format!("#{p}"));
+    // the loop point at tick 96, the jump back at the end (tick 384)
+    assert_eq!((info.loop_start, info.loop_end), (Some(96), Some(384)));
+    assert_eq!(info.tempos, vec![(0, 120)]);
+    assert_eq!(info.tracks[1].notes, 4);
+    assert_eq!(info.tracks[2].notes, 2);
+    assert!(info.timing_dev_ms < 5.0, "{}", info.timing_dev_ms);
+    // header: type 1, conductor + 3 tracks, 48 ticks a quarter
+    assert_eq!(&bytes[..4], b"MThd");
+    assert_eq!(&bytes[8..14], &[0, 1, 0, 4, 0, 48]);
+    // track 1: bank select 3, program 0, note 60 at ticks 0, 96, 192, 288 for 48
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("loopStart") && text.contains("loopEnd"));
+    // past the conductor and sequence track 0 (the tempo)
+    let mut p = 14;
+    for _ in 0..2 {
+        p += 8 + u32::from_be_bytes(bytes[p + 4..p + 8].try_into().unwrap()) as usize;
+    }
+    let len = u32::from_be_bytes(bytes[p + 4..p + 8].try_into().unwrap()) as usize;
+    let d = &bytes[p + 8..p + 8 + len];
+    p = 0;
+    let (mut t, mut ons, mut offs, mut status) = (0u32, Vec::new(), Vec::new(), 0u8);
+    let mut banks = Vec::new();
+    while p < d.len() {
+        let mut v = 0u32;
+        loop {
+            let b = d[p];
+            p += 1;
+            v = v << 7 | u32::from(b & 0x7f);
+            if b & 0x80 == 0 {
+                break;
+            }
+        }
+        t += v;
+        if d[p] == 0xff {
+            let n = d[p + 2] as usize;
+            p += 3 + n;
+            continue;
+        }
+        status = d[p];
+        let (a, b2) = (d[p + 1], d.get(p + 2).copied().unwrap_or(0));
+        match status & 0xf0 {
+            0x90 => ons.push((t, a, b2)),
+            0x80 => offs.push((t, a)),
+            0xb0 if a == 0 => banks.push(b2),
+            _ => {}
+        }
+        p += if status & 0xf0 == 0xc0 { 2 } else { 3 };
+    }
+    let _ = status;
+    assert_eq!(ons, vec![(0, 60, 100), (96, 60, 100), (192, 60, 100), (288, 60, 100)]);
+    assert_eq!(offs, vec![(48, 60), (144, 60), (240, 60), (336, 60)]);
+    assert_eq!(banks, vec![3]);
+}
+
+#[test]
+fn soundfont_bank_of_the_synthetic_wd() {
+    use crate::export::sf2;
+    let w = wd();
+    let b = sf2::bank(&w, 0);
+    assert_eq!(b.samples.len(), 1);
+    // one block that loops on itself
+    assert_eq!(b.samples[0].looped, Some((0, 28)));
+    assert_eq!(b.samples[0].pcm.len(), 28);
+    let z = &b.instruments[0].zones;
+    assert_eq!(z.len(), 1);
+    assert_eq!((z[0].keys, z[0].vels), ((0, 127), (0, 127)));
+    // tune 0: key 60 plays the sample at 48 kHz
+    assert_eq!((b.samples[0].rate, b.samples[0].root, z[0].tune_cents), (48000, 60, 0));
+    // instant attack, sustain at full level
+    assert_eq!((z[0].env.attack, z[0].env.sustain), (-12000, 0));
+    let path = std::env::temp_dir().join(format!("ffx-studio-{}.sf2", std::process::id()));
+    sf2::write(&path, "t", &[&b]).unwrap();
+    let f = std::fs::read(&path).unwrap();
+    assert_eq!((&f[..4], &f[8..12]), (&b"RIFF"[..], &b"sfbk"[..]));
+    assert_eq!(u32::from_le_bytes(f[4..8].try_into().unwrap()) as usize, f.len() - 8);
+    std::fs::remove_file(&path).ok();
+}

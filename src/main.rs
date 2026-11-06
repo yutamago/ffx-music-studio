@@ -6,6 +6,7 @@
 mod app;
 mod audio;
 mod edit;
+mod export;
 mod library;
 mod midi;
 mod player;
@@ -43,6 +44,10 @@ usage:
       the disc's tracks
   ffx-music-studio [--config <file>] --survey
       per track: channels with notes, notes, length, bank, the longest samples
+  ffx-music-studio [--config <file>] --export <dir> [--only <track>]... [--no-renders]
+                   [--no-samples] [--loops <n>] [--max-seconds <s>] [--threads <n>]
+      the music for other DAWs: MIDI, SoundFonts, WAV samples, reverb impulse
+      responses, reference renders and HOW-TO-OPEN.md (README, \"Export\")
   ffx-music-studio [--config <file>] --render <track> <seconds> <out.wav> [edits...]
       renders through the studio's playback path (track: id, musicNNN or part of
       the name). Edits:
@@ -97,6 +102,37 @@ fn run(args: &[String]) -> Result<()> {
             Ok(())
         }
         Some("--render") => render(config, &rest[1..]),
+        Some("--export") => {
+            let dir = PathBuf::from(rest.get(1).context("--export <dir>")?);
+            let mut o = export::Opts::default();
+            let mut i = 2;
+            while i < rest.len() {
+                let val = |i: usize| rest.get(i + 1).with_context(|| format!("{} needs a value", rest[i]));
+                match rest[i].as_str() {
+                    "--only" => {
+                        o.only.push(val(i)?.clone());
+                        i += 1;
+                    }
+                    "--no-renders" => o.renders = false,
+                    "--no-samples" => o.samples = false,
+                    "--loops" => {
+                        o.loops = val(i)?.parse::<usize>()?.max(1);
+                        i += 1;
+                    }
+                    "--max-seconds" => {
+                        o.max_seconds = val(i)?.parse()?;
+                        i += 1;
+                    }
+                    "--threads" => {
+                        o.threads = val(i)?.parse()?;
+                        i += 1;
+                    }
+                    other => bail!("unknown export option {other}\n{USAGE}"),
+                }
+                i += 1;
+            }
+            export::run(&mut Library::open(config.as_deref())?, &dir, &o)
+        }
         Some("--survey") => match rest.get(1) {
             Some(q) => survey::notes(&mut Library::open(config.as_deref())?, q),
             None => survey::run(&mut Library::open(config.as_deref())?),
