@@ -171,6 +171,10 @@ struct Chan {
     cc: [u8; 128],
     /// Driver values seen (CC 20-22): the General MIDI ones are ignored.
     driver: bool,
+    /// A program change came: before one, a note picks instrument 0 (live
+    /// playing and clips without program changes; the export always sends
+    /// one first).
+    program: bool,
 }
 
 impl Default for Chan {
@@ -181,7 +185,7 @@ impl Default for Chan {
         cc[10] = 64;
         cc[101] = 127;
         cc[100] = 127;
-        Chan { cc, driver: false }
+        Chan { cc, driver: false, program: false }
     }
 }
 
@@ -285,6 +289,10 @@ impl Translator {
         }
         if let Some(p) = b.program {
             cmds.push(vec![0x20, p]);
+            c.program = true;
+        } else if !c.program && !b.ons.is_empty() {
+            cmds.push(vec![0x20, 0]);
+            c.program = true;
         }
         // the envelope
         if t(cc::ADSR_RESET) {
@@ -463,14 +471,16 @@ mod tests {
         b.push(Midi::NoteOff { ch: 2, key: 60 });
         b.push(Midi::NoteOn { ch: 2, key: 60, vel: 100 });
         b.push(Midi::Cc { ch: 2, cc: cc::RESTRIKE, value: 60 });
+        b.push(Midi::Program { ch: 2, program: 3 });
         let c = Translator::default().commands(2, &b, ExtHeader::default());
-        assert_eq!(c.cmds, vec![vec![0x11, 60, 100]]);
+        assert_eq!(c.cmds, vec![vec![0x20, 3], vec![0x11, 60, 100]]);
         // without the marker: key-off, then key-on
         let mut b = Batch::default();
         b.push(Midi::NoteOff { ch: 2, key: 60 });
         b.push(Midi::NoteOn { ch: 2, key: 60, vel: 100 });
+        b.push(Midi::Program { ch: 2, program: 3 });
         let c = Translator::default().commands(2, &b, ExtHeader::default());
-        assert_eq!(c.cmds, vec![vec![0x1a, 60], vec![0x11, 60, 100]]);
+        assert_eq!(c.cmds, vec![vec![0x20, 3], vec![0x1a, 60], vec![0x11, 60, 100]]);
     }
 
     #[test]
@@ -481,4 +491,17 @@ mod tests {
         let c = Translator::default().commands(0, &b, ExtHeader::default());
         assert_eq!(c.cmds, vec![vec![EXT_VOLUME, 0xff, 0x3f], vec![EXT_PAN, 0x40, 0]]);
     }
+
+    #[test]
+    fn a_note_before_any_program_plays_instrument_0() {
+        let mut t = Translator::default();
+        let mut b = Batch::default();
+        b.push(Midi::NoteOn { ch: 1, key: 60, vel: 100 });
+        let c = t.commands(1, &b, ExtHeader::default());
+        assert_eq!(c.cmds.first(), Some(&vec![0x20, 0]));
+        // once only
+        let c = t.commands(1, &b, ExtHeader::default());
+        assert!(!c.cmds.contains(&vec![0x20, 0]));
+    }
+
 }

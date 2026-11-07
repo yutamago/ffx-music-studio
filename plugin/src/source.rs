@@ -153,15 +153,22 @@ impl Library {
             return Self::open_at(Path::new(path));
         }
         let cands = candidates();
+        // a candidate that fails (a studio settings file without [source],
+        // a disc image that moved) does not stop the search
+        let mut errors = Vec::new();
         for c in &cands {
             if c.is_file() || (c.is_dir() && is_export(c)) {
-                return Self::open_at(c);
+                match Self::open_at(c) {
+                    Ok(l) => return Ok(l),
+                    Err(e) => errors.push(format!("  {}: {e:#}", c.display())),
+                }
             }
         }
         bail!(
             "no disc or export set. Set the source to a demaster.toml / ffx-music-studio.toml (its [source] iso is your PS2 disc \
-             image) or to an `ffx-music-studio --export` folder, or put ffx-ps2-sound.toml in one of:\n{}",
-            cands.iter().map(|p| format!("  {}", p.display())).collect::<Vec<_>>().join("\n")
+             image) or to an `ffx-music-studio --export` folder, or put ffx-ps2-sound.toml in one of:\n{}{}",
+            cands.iter().map(|p| format!("  {}", p.display())).collect::<Vec<_>>().join("\n"),
+            if errors.is_empty() { String::new() } else { format!("\ntried and failed:\n{}", errors.join("\n")) }
         )
     }
 
