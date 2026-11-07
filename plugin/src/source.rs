@@ -110,6 +110,42 @@ pub fn module_dir() -> Option<PathBuf> {
     }
 }
 
+/// The plugin's log: `%APPDATA%\FFX PS2 Sound\ffx-ps2-sound.log`
+/// (`~/.config/ffx-ps2-sound/` elsewhere), since hosts rarely show a
+/// plugin's own messages. Best effort; kept under 1 MB.
+pub fn log_path() -> Option<PathBuf> {
+    let dir = match std::env::var_os("APPDATA") {
+        Some(a) => PathBuf::from(a).join("FFX PS2 Sound"),
+        None => PathBuf::from(std::env::var_os("HOME")?).join(".config").join("ffx-ps2-sound"),
+    };
+    Some(dir.join("ffx-ps2-sound.log"))
+}
+
+pub fn log_line(msg: &str) {
+    use std::io::Write;
+    let Some(p) = log_path() else { return };
+    if let Some(d) = p.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    if std::fs::metadata(&p).is_ok_and(|m| m.len() > 1 << 20) {
+        let _ = std::fs::remove_file(&p);
+    }
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        // UTC date and time (days to civil date, H. Hinnant's algorithm)
+        let (d, t) = ((secs / 86400) as i64 + 719_468, secs % 86400);
+        let era = d.div_euclid(146_097);
+        let doe = d - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        let _ = writeln!(f, "{year}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC {msg}", t / 3600, t / 60 % 60, t % 60);
+    }
+}
+
 /// The places looked at, in order, when no source is set: `FFX_PS2_SOUND`,
 /// then next to the plugin file and up to four folders above it (the VST3
 /// bundle's own folders, then the folder holding the bundle), then the

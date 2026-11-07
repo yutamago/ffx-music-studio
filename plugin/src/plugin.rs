@@ -58,7 +58,7 @@ impl SoundParams {
         let n = names.clone();
         SoundParams {
             source: Mutex::new(String::new()),
-            track: IntParam::new("Track", 0, IntRange::Linear { min: 0, max: 255 }).with_value_to_string(Arc::new(move |v| {
+            track: IntParam::new("Track", 16, IntRange::Linear { min: 0, max: 255 }).with_value_to_string(Arc::new(move |v| {
                 if v == 0 {
                     return "by bank".into();
                 }
@@ -236,10 +236,12 @@ impl Plugin for FfxSound {
                     Ok(inst) => {
                         *loader.status.lock().expect("status") = inst.label.clone();
                         nih_log!("FFX PS2 Sound: {}", inst.label);
+                        crate::source::log_line(&format!("loaded {}", inst.label));
                         *loader.ready.lock().expect("ready") = Some((key, inst));
                     }
                     Err(e) => {
                         nih_log!("FFX PS2 Sound: {e:#}");
+                        crate::source::log_line(&format!("error: {e:#}"));
                         *loader.status.lock().expect("status") = format!("{e:#}");
                     }
                 }
