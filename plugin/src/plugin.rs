@@ -51,7 +51,25 @@ pub struct SoundParams {
 }
 
 /// Names of the tracks, for the track parameter's display.
-type Names = Arc<RwLock<BTreeMap<i32, String>>>;
+pub(crate) type Names = Arc<RwLock<BTreeMap<i32, String>>>;
+
+/// What the plugin window shows of the chip: every voice's level (0-255)
+/// and driver track (255: free), and the output's peaks (f32 bits).
+pub(crate) struct Meters {
+    pub level: [std::sync::atomic::AtomicU8; crate::engine::VOICES],
+    pub track: [std::sync::atomic::AtomicU8; crate::engine::VOICES],
+    pub peak: [std::sync::atomic::AtomicU32; 2],
+}
+
+impl Default for Meters {
+    fn default() -> Self {
+        Meters {
+            level: std::array::from_fn(|_| Default::default()),
+            track: std::array::from_fn(|_| std::sync::atomic::AtomicU8::new(255)),
+            peak: Default::default(),
+        }
+    }
+}
 
 impl SoundParams {
     fn new(names: Names) -> Self {
@@ -95,14 +113,18 @@ pub enum Task {
     Load(Key),
 }
 
-/// Shared with the background thread.
+/// Shared with the background thread (and the plugin window).
 #[derive(Default)]
-struct Loader {
+pub(crate) struct Loader {
     lib: Mutex<Option<(String, Library)>>,
     ready: Mutex<Option<(Key, Arc<Instrument>)>>,
-    status: Mutex<String>,
+    pub status: Mutex<String>,
+    /// The last load worked (else `status` is its error).
+    pub ok: std::sync::atomic::AtomicBool,
+    /// Banks of the open source (the Bank parameter's range).
+    pub banks: std::sync::atomic::AtomicUsize,
     /// A load is running (one at a time; the latest settings win).
-    busy: std::sync::atomic::AtomicBool,
+    pub busy: std::sync::atomic::AtomicBool,
 }
 
 /// Linked instances: events of parts 2 and 3 for part 1's engine.
@@ -128,6 +150,9 @@ pub struct FfxSound {
     params: Arc<SoundParams>,
     names: Names,
     loader: Arc<Loader>,
+    meters: Arc<Meters>,
+    #[cfg(feature = "editor")]
+    editor_state: Arc<nih_plug_egui::EguiState>,
     engine: Option<Engine>,
     sr: f32,
     max_block: usize,
@@ -144,6 +169,9 @@ impl Default for FfxSound {
             params: Arc::new(SoundParams::new(names.clone())),
             names,
             loader: Arc::default(),
+            meters: Arc::default(),
+            #[cfg(feature = "editor")]
+            editor_state: crate::editor::default_state(),
             engine: None,
             sr: 48000.0,
             max_block: 512,
@@ -159,6 +187,17 @@ impl FfxSound {
     fn key(&self) -> Key {
         let src = self.params.source.try_lock().map(|s| s.clone()).unwrap_or_default();
         (src, self.params.track.value(), self.params.bank.value())
+    }
+
+    fn clear_meters(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        for v in 0..crate::engine::VOICES {
+            self.meters.level[v].store(0, Relaxed);
+            self.meters.track[v].store(255, Relaxed);
+        }
+        for p in &self.meters.peak {
+            p.store(0, Relaxed);
+        }
     }
 
     fn settings(&self) -> Settings {
@@ -178,6 +217,7 @@ fn load(loader: &Loader, names: &Names, key: &Key) -> anyhow::Result<Arc<Instrum
     if slot.as_ref().is_none_or(|(s, _)| *s != key.0) {
         *slot = None;
         let lib = Library::open(&key.0)?;
+        loader.banks.store(lib.banks.len(), std::sync::atomic::Ordering::Release);
         if let Ok(mut n) = names.write() {
             n.clear();
             for t in &lib.tracks {
@@ -219,6 +259,19 @@ impl Plugin for FfxSound {
         self.params.clone()
     }
 
+    #[cfg(feature = "editor")]
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        crate::editor::create(
+            self.editor_state.clone(),
+            crate::editor::Shared {
+                params: self.params.clone(),
+                names: self.names.clone(),
+                loader: self.loader.clone(),
+                meters: self.meters.clone(),
+            },
+        )
+    }
+
     fn task_executor(&mut self) -> TaskExecutor<Self> {
         let loader = self.loader.clone();
         let names = self.names.clone();
@@ -235,6 +288,7 @@ impl Plugin for FfxSound {
                 match r {
                     Ok(inst) => {
                         *loader.status.lock().expect("status") = inst.label.clone();
+                        loader.ok.store(true, std::sync::atomic::Ordering::Release);
                         nih_log!("FFX PS2 Sound: {}", inst.label);
                         crate::source::log_line(&format!("loaded {}", inst.label));
                         *loader.ready.lock().expect("ready") = Some((key, inst));
@@ -243,6 +297,7 @@ impl Plugin for FfxSound {
                         nih_log!("FFX PS2 Sound: {e:#}");
                         crate::source::log_line(&format!("error: {e:#}"));
                         *loader.status.lock().expect("status") = format!("{e:#}");
+                        loader.ok.store(false, std::sync::atomic::Ordering::Release);
                     }
                 }
             }
@@ -354,6 +409,7 @@ impl Plugin for FfxSound {
             for ch in out.iter_mut() {
                 ch.fill(0.0);
             }
+            self.clear_meters();
             return ProcessStatus::Normal;
         }
         let Some(e) = &mut self.engine else {
@@ -373,6 +429,20 @@ impl Plugin for FfxSound {
         e.process(&tr, &self.events, l, r);
         for (h, m) in self.linked.drain(..) {
             e.push_host(h, m);
+        }
+        // the window's meters
+        use std::sync::atomic::Ordering::Relaxed;
+        let tracks = e.song().voice_tracks();
+        for v in 0..crate::engine::VOICES {
+            let lv = (e.spu().voice_level(v).sqrt() * 255.0).round().clamp(0.0, 255.0) as u8;
+            self.meters.level[v].store(lv, Relaxed);
+            self.meters.track[v].store(tracks[v].map_or(255, |t| t.min(254) as u8), Relaxed);
+        }
+        for (i, ch) in [&*l, &*r].into_iter().enumerate() {
+            let pk = ch.iter().fold(0f32, |p, x| p.max(x.abs()));
+            let old = f32::from_bits(self.meters.peak[i].load(Relaxed));
+            // a falling peak: about 1.5 s to fade at 512-sample blocks
+            self.meters.peak[i].store(pk.max(old * 0.97).to_bits(), Relaxed);
         }
         ProcessStatus::Normal
     }

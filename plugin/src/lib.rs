@@ -4,6 +4,8 @@
 //! `engine` is the processing, `midi` the MIDI to driver commands,
 //! `source` the disc or export folder, `plugin` the nih-plug wrapper.
 
+#[cfg(feature = "editor")]
+mod editor;
 pub mod engine;
 pub mod midi;
 pub mod offline;

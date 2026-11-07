@@ -477,12 +477,25 @@ leaves them out). Setup for users, FL Studio routing and the controller
 table: `HOW-TO-OPEN.md` of an export ("FFX PS2 Sound").
 
 ```bash
-cargo build --release -p ffx-spu2-plugin                 # Linux .so (CLAP)
-tools/build-plugin-windows.sh                            # target/bundled/FFX PS2 Sound.{vst3,clap} (cargo-xwin)
+cargo build --release -p ffx-spu2-plugin                 # Linux .so (CLAP), without the window
+tools/build-plugin-windows.sh                            # target/bundled/FFX PS2 Sound.{vst3,clap} (cargo-xwin), with the window
 cargo run --release -p ffx-spu2-plugin --example render-midi -- \
   --source <export dir|toml> --track 16 <export>/midi/music016-battle-theme-1-09.mid \
   --compare <export>/renders/music016-battle-theme-1-09.wav [--until <loop end s>]
 ```
+
+**The window** (`plugin/src/editor.rs`, feature `editor`, egui through
+`nih_plug_egui`; the Windows build turns it on, the Linux build leaves it
+off as it needs the X11 headers): the loaded song and its source (or the
+error), the songs to pick from (search by name or number; "a bank by
+number" shows the Bank slider), Part and Link, Tempo, the output stage and
+Gain, the 48 voices live (rows: MIDI ports, colour: channel) with the
+output level, and the instruments' source (a path, or found by itself) and
+the log file (`%APPDATA%\FFX PS2 Sound\ffx-ps2-sound.log`). Hosts that
+show no parameters of a plugin (SoundCraft 0.17) need it. To look at it
+without a DAW, build nih-plug's standalone (`nih_export_standalone`) in a
+crate *outside* this workspace: the studio's `midir` 0.11 and nih-plug's
+`midir` 0.9 both link `alsa`, which Cargo refuses in one workspace.
 
 **How it plays** (`plugin/src/engine.rs`, `midi.rs`):
 

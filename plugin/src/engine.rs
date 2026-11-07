@@ -24,6 +24,8 @@ use crate::midi::{Batch, Midi, Translator};
 
 /// MIDI channels: one driver track each.
 pub const TRACKS: usize = crate::midi::TRACKS;
+/// The chip's voices (48: both SPU2 cores).
+pub const VOICES: usize = demaster::spu2::VOICES;
 /// Ticks a quarter note (the MIDI export's PPQN).
 pub const PPQN: f64 = 48.0;
 /// How far the song runs behind the host (seconds).
