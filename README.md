@@ -496,6 +496,10 @@ show no parameters of a plugin (SoundCraft 0.17) need it. To look at it
 without a DAW, build nih-plug's standalone (`nih_export_standalone`) in a
 crate *outside* this workspace: the studio's `midir` 0.11 and nih-plug's
 `midir` 0.9 both link `alsa`, which Cargo refuses in one workspace.
+The CLAP entry point is our own (`plugin/src/clap_entry.rs`): nih-plug's,
+except that the GUI extension's `show`/`hide` answer true. nih-plug returns
+false from `show` for its embedded editors, and hosts that check it
+(SoundCraft) destroy the editor again: "Open Plugin Editor" did nothing.
 
 **How it plays** (`plugin/src/engine.rs`, `midi.rs`):
 

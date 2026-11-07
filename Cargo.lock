@@ -1183,6 +1183,7 @@ name = "ffx-spu2-plugin"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap-sys",
  "demaster",
  "ffx-vbf",
  "nih_plug",

@@ -461,5 +461,5 @@ impl Vst3Plugin for FfxSound {
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Instrument, Vst3SubCategory::Synth, Vst3SubCategory::Stereo];
 }
 
-nih_export_clap!(FfxSound);
+// CLAP: src/clap_entry.rs (nih-plug's entry with a GUI `show` that says yes)
 nih_export_vst3!(FfxSound);

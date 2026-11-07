@@ -6,6 +6,7 @@
 
 #[cfg(feature = "editor")]
 mod editor;
+mod clap_entry;
 pub mod engine;
 pub mod midi;
 pub mod offline;
